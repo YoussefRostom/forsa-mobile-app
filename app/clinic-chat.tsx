@@ -108,7 +108,6 @@ export default function ClinicChatScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
     >
-      {/* Flat Header with Back Arrow and Hamburger Menu */}
       <View style={styles.headerBar}>
         <TouchableOpacity 
           style={styles.backBtn} 
@@ -118,19 +117,14 @@ export default function ClinicChatScreen() {
         >
           <Ionicons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>{contact}</Text>
-        {/* admin shortcut removed from chat screen */}
+        <Text style={styles.headerTitle} numberOfLines={1}>{contact}</Text>
         <TouchableOpacity 
           style={styles.hamburgerBtn} 
           onPress={openMenu} 
           accessibilityLabel="Open menu"
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
         >
-          <View style={styles.hamburgerBox}>
-            <View style={styles.hamburgerLine} />
-            <View style={styles.hamburgerLine} />
-            <View style={styles.hamburgerLine} />
-          </View>
+          <Ionicons name="menu" size={24} color="#fff" />
         </TouchableOpacity>
       </View>
       <HamburgerMenu />
@@ -188,64 +182,41 @@ export default function ClinicChatScreen() {
 const styles = StyleSheet.create({
   headerBar: {
     backgroundColor: '#000',
-    height: 80,
+    paddingTop: Platform.OS === 'ios' ? 60 : 40,
+    paddingBottom: 16,
+    paddingHorizontal: 16,
     flexDirection: 'row',
-    alignItems: 'flex-end',
-    paddingBottom: 12,
-    paddingHorizontal: 0,
-    position: 'relative',
-    borderBottomLeftRadius: 0,
-    borderBottomRightRadius: 0,
-    marginBottom: 0,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
   },
   backBtn: {
-    position: 'absolute',
-    left: 16,
-    bottom: 12,
-    zIndex: 2,
     width: 44,
     height: 44,
     borderRadius: 22,
-    borderWidth: 2,
-    borderColor: '#000',
-    backgroundColor: '#000',
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   headerTitle: {
     flex: 1,
     color: '#fff',
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: 'bold',
     textAlign: 'center',
-    marginLeft: 44,
-    marginRight: 44,
+    marginHorizontal: 12,
   },
   hamburgerBtn: {
-    position: 'absolute',
-    right: 16,
-    bottom: 12,
-    zIndex: 2,
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: '#000',
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: '#000',
-  },
-  hamburgerBox: {
-    width: 24,
-    height: 18,
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  hamburgerLine: {
-    width: 20,
-    height: 2,
-    backgroundColor: '#fff',
-    borderRadius: 1,
   },
   messageBubble: {
     maxWidth: '80%',

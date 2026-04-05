@@ -81,25 +81,28 @@ export default function PlayerMessagesScreen() {
         <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
           {/* Header */}
           <View style={styles.header}>
-            <TouchableOpacity style={styles.menuButton} onPress={openMenu}>
-              <Ionicons name="menu" size={24} color="#fff" />
-      </TouchableOpacity>
+            <View style={styles.headerTopRow}>
+              <TouchableOpacity style={styles.menuButton} onPress={openMenu}>
+                <Ionicons name="menu" size={24} color="#fff" />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={async () => {
+                try {
+                  const adminId = await findAdminUserId();
+                  if (!adminId) { Alert.alert('No admin found'); return; }
+                  const convId = await getOrCreateConversation(adminId);
+                  router.push({ pathname: '/player-chat', params: { conversationId: convId, otherUserId: adminId, name: 'Admin' } });
+                } catch (err) { console.error(err); }
+              }}>
+                <View style={styles.textAdminBtn}>
+                  <Ionicons name="chatbubble-ellipses-outline" size={16} color="#fff" style={{marginRight: 6}} />
+                  <Text style={styles.textAdminText}>Text Admin</Text>
+                </View>
+              </TouchableOpacity>
+            </View>
             <View style={styles.headerContent}>
               <Text style={styles.headerTitle}>{i18n.t('messages') || 'Messages'}</Text>
               <Text style={styles.headerSubtitle}>{i18n.t('yourConversations') || 'Your conversations'}</Text>
             </View>
-            <TouchableOpacity style={{ position: 'absolute', right: 16, top: Platform.OS === 'ios' ? 60 : 40 }} onPress={async () => {
-              try {
-                const adminId = await findAdminUserId();
-                if (!adminId) { Alert.alert('No admin found'); return; }
-                const convId = await getOrCreateConversation(adminId);
-                router.push({ pathname: '/player-chat', params: { conversationId: convId, otherUserId: adminId, name: 'Admin' } });
-              } catch (err) { console.error(err); }
-            }}>
-              <View style={{ backgroundColor: 'transparent', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' }}>
-                <Text style={{ color: '#fff', fontWeight: '600' }}>Text Admin</Text>
-              </View>
-            </TouchableOpacity>
           </View>
 
           <ScrollView 
@@ -221,6 +224,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingBottom: 20,
   },
+  headerTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
   menuButton: {
     width: 44,
     height: 44,
@@ -228,10 +237,24 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.1)',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 20,
   },
   headerContent: {
     alignItems: 'center',
+  },
+  textAdminBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
+  },
+  textAdminText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 14,
   },
   headerTitle: {
     fontSize: 32,

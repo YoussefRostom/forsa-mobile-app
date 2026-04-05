@@ -80,25 +80,28 @@ export default function ParentMessagesScreen() {
         <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
           {/* Header */}
           <View style={styles.header}>
-            <TouchableOpacity style={styles.menuButton} onPress={openMenu}>
-              <Ionicons name="menu" size={24} color="#fff" />
-            </TouchableOpacity>
+            <View style={styles.headerTopRow}>
+              <TouchableOpacity style={styles.menuButton} onPress={openMenu}>
+                <Ionicons name="menu" size={24} color="#fff" />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={async () => {
+                try {
+                  const adminId = await findAdminUserId();
+                  if (!adminId) { Alert.alert('No admin found'); return; }
+                  const convId = await getOrCreateConversation(adminId);
+                  router.push({ pathname: '/academy-chat', params: { conversationId: convId, otherUserId: adminId, contact: 'Admin' } });
+                } catch (err) { console.error(err); }
+              }}>
+                <View style={styles.textAdminBtn}>
+                  <Ionicons name="chatbubble-ellipses-outline" size={16} color="#fff" style={{marginRight: 6}} />
+                  <Text style={styles.textAdminText}>Text Admin</Text>
+                </View>
+              </TouchableOpacity>
+            </View>
             <View style={styles.headerContent}>
               <Text style={styles.headerTitle}>{i18n.t('parentMessages') || 'Messages'}</Text>
               <Text style={styles.headerSubtitle}>{i18n.t('yourConversations') || 'Your conversations'}</Text>
             </View>
-            <TouchableOpacity style={{ position: 'absolute', right: 16, top: Platform.OS === 'ios' ? 60 : 40 }} onPress={async () => {
-              try {
-                const adminId = await findAdminUserId();
-                if (!adminId) { Alert.alert('No admin found'); return; }
-                const convId = await getOrCreateConversation(adminId);
-                router.push({ pathname: '/academy-chat', params: { conversationId: convId, otherUserId: adminId, contact: 'Admin' } });
-              } catch (err) { console.error(err); }
-            }}>
-              <View style={{ backgroundColor: 'transparent', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' }}>
-                <Text style={{ color: '#fff', fontWeight: '600' }}>Text Admin</Text>
-              </View>
-            </TouchableOpacity>
           </View>
 
           <HamburgerMenu />
@@ -125,7 +128,7 @@ export default function ParentMessagesScreen() {
                 
                 return (
                   <TouchableOpacity 
-                    style={[styles.messageCard, unreadCount > 0 && styles.messageCardUnread]}
+                    style={styles.conversationCard}
                     onPress={() => router.push({
                       pathname: '/academy-chat', // Reuse academy-chat for now, can create parent-chat later
                       params: {
@@ -134,30 +137,36 @@ export default function ParentMessagesScreen() {
                         contact: displayName
                       }
                     })}
+                    activeOpacity={0.8}
                   >
-                    <View style={styles.messageHeader}>
-                      <View style={[styles.avatar, unreadCount > 0 && styles.avatarUnread]}>
-                        {item.otherParticipantPhoto ? (
-                          <Image source={{ uri: item.otherParticipantPhoto }} style={styles.avatarImage} />
-                        ) : (
-                          <Ionicons 
-                            name={isClinic ? 'medical' : 'school'} 
-                            size={20} 
-                            color={unreadCount > 0 ? '#fff' : '#666'} 
-                          />
+                    <View style={styles.avatarContainer}>
+                      {item.otherParticipantPhoto ? (
+                        <Image source={{ uri: item.otherParticipantPhoto }} style={styles.avatarImage} />
+                      ) : (
+                        <Ionicons 
+                          name={isClinic ? 'medical' : 'school'} 
+                          size={24} 
+                          color="#000" 
+                        />
+                      )}
+                    </View>
+                    <View style={styles.conversationContent}>
+                      <View style={styles.conversationHeader}>
+                        <Text style={styles.conversationName}>{displayName}</Text>
+                        {unreadCount > 0 && (
+                          <View style={styles.unreadBadge}>
+                            <Text style={styles.unreadText}>{unreadCount}</Text>
+                          </View>
                         )}
                       </View>
-                      <View style={styles.messageInfo}>
-                        <View style={styles.messageHeaderRow}>
-                          <Text style={[styles.msgSender, unreadCount > 0 && styles.msgSenderUnread]}>{displayName}</Text>
-                          {lastMsgTime && <Text style={styles.msgTime}>{lastMsgTime}</Text>}
-                        </View>
-                        <Text style={[styles.msgLast, unreadCount > 0 && styles.msgLastUnread]} numberOfLines={1}>
-                          {lastMsg || 'No messages yet'}
-                        </Text>
-                      </View>
-                      {unreadCount > 0 && <View style={styles.unreadDot} />}
+                      <Text style={styles.lastMessage} numberOfLines={1}>
+                        {lastMsg || 'No messages yet'}
+                      </Text>
+                      {lastMsgTime && (
+                        <Text style={styles.lastMessageTime}>{lastMsgTime}</Text>
+                      )}
                     </View>
+                    <Ionicons name="chevron-forward" size={20} color="#999" />
                   </TouchableOpacity>
                 );
               }}
@@ -221,8 +230,13 @@ const styles = StyleSheet.create({
     paddingTop: Platform.OS === 'ios' ? 60 : 40,
     paddingHorizontal: 24,
     paddingBottom: 20,
+  },
+  headerTopRow: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
+    marginBottom: 20,
+    width: '100%',
   },
   menuButton: {
     width: 44,
@@ -231,11 +245,24 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.1)',
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 16,
   },
   headerContent: {
-    flex: 1,
     alignItems: 'center',
+  },
+  textAdminBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
+  },
+  textAdminText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 14,
   },
   headerTitle: {
     fontSize: 28,
@@ -253,81 +280,71 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 40,
   },
-  messageCard: {
+  messageCard: { display: 'none' },
+  conversationCard: {
     backgroundColor: '#fff',
-    borderRadius: 20,
-    padding: 16,
-    marginBottom: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-  messageCardUnread: {
-    backgroundColor: '#f8f8f8',
-    borderLeftWidth: 4,
-    borderLeftColor: '#000',
-  },
-  messageHeader: {
+    borderRadius: 24,
+    padding: 20,
+    marginBottom: 16,
     flexDirection: 'row',
     alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
+    elevation: 10,
   },
-  avatar: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
+  avatarContainer: {
+    marginRight: 16,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     backgroundColor: '#f0f0f0',
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 12,
   },
   avatarImage: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
   },
-  avatarUnread: {
-    backgroundColor: '#000',
-  },
-  messageInfo: {
-    flex: 1,
-  },
-  messageHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 4,
-  },
-  msgSender: {
-    fontSize: 16,
-    fontWeight: '500',
-    color: '#333',
-    flex: 1,
-  },
-  msgSenderUnread: {
-    fontWeight: 'bold',
-    color: '#000',
-  },
-  msgLast: {
-    fontSize: 14,
-    color: '#666',
-    marginTop: 2,
-  },
-  msgLastUnread: {
-    color: '#333',
-    fontWeight: '500',
-  },
-  msgTime: {
+  lastMessageTime: {
     fontSize: 12,
     color: '#999',
+    marginTop: 4,
   },
-  unreadDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
+  conversationContent: {
+    flex: 1,
+  },
+  conversationHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  conversationName: {
+    fontWeight: 'bold',
+    fontSize: 16,
+    color: '#000',
+  },
+  unreadBadge: {
     backgroundColor: '#000',
-    marginLeft: 8,
+    borderRadius: 12,
+    minWidth: 24,
+    height: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+  },
+  unreadText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 12,
+  },
+  lastMessage: {
+    color: '#666',
+    fontSize: 14,
+    marginTop: 4,
   },
   emptyState: {
     alignItems: 'center',

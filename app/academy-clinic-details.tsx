@@ -20,6 +20,7 @@ export default function AcademyClinicDetailsScreen() {
   const [bookingComments, setBookingComments] = useState('');
   const [preferredTime, setPreferredTime] = useState<Date | null>(null);
   const [showTimePicker, setShowTimePicker] = useState(false);
+  const [selectedShift, setSelectedShift] = useState<'Day' | 'Night' | null>(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
 
   const hideDatePicker = () => {
@@ -193,6 +194,7 @@ export default function AcademyClinicDetailsScreen() {
         doctor: doctorName,
         service: serviceName,
         price: servicePrice,
+        shift: selectedShift,
         comments: bookingComments.trim() || null,
       };
 
@@ -400,8 +402,27 @@ export default function AcademyClinicDetailsScreen() {
                 date={preferredTime || new Date()}
                 onConfirm={handleConfirm}
                 onCancel={hideDatePicker}
+                is24Hour={false}
                 textColor="#000"
               />
+
+              <Text style={styles.bookingLabel}>{i18n.t('shiftPreference') || 'Shift Preference'}</Text>
+              <View style={{flexDirection: 'row', gap: 12, marginBottom: 16}}>
+                <TouchableOpacity
+                  style={[styles.serviceOption, {flex: 1, marginBottom: 0, justifyContent: 'center'}, selectedShift === 'Day' && styles.serviceOptionSelected]}
+                  onPress={() => setSelectedShift('Day')}
+                >
+                  <Ionicons name="sunny" size={20} color={selectedShift === 'Day' ? '#000' : '#666'} style={{marginRight: 8}}/>
+                  <Text style={[styles.serviceOptionText, {textAlign: 'center', flex: 0, color: selectedShift === 'Day' ? '#000' : '#666'}]}>{i18n.t('dayShift') || 'Before 3PM'}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.serviceOption, {flex: 1, marginBottom: 0, justifyContent: 'center'}, selectedShift === 'Night' && styles.serviceOptionSelected]}
+                  onPress={() => setSelectedShift('Night')}
+                >
+                  <Ionicons name="moon" size={20} color={selectedShift === 'Night' ? '#000' : '#666'} style={{marginRight: 8}}/>
+                  <Text style={[styles.serviceOptionText, {textAlign: 'center', flex: 0, color: selectedShift === 'Night' ? '#000' : '#666'}]}>{i18n.t('nightShift') || 'After 3PM'}</Text>
+                </TouchableOpacity>
+              </View>
 
               <Text style={styles.bookingLabel}>{i18n.t('additionalComments') || 'Additional comments (optional)'}</Text>
               <TextInput
@@ -415,9 +436,9 @@ export default function AcademyClinicDetailsScreen() {
               />
 
               <TouchableOpacity
-                style={[styles.reserveButton, bookingLoading && styles.reserveButtonDisabled]}
+                style={[styles.reserveButton, (bookingLoading || !selectedShift || !preferredTime) && styles.reserveButtonDisabled]}
                 onPress={() => handleReserve()}
-                disabled={bookingLoading || !clinic.services || clinic.services.length === 0}
+                disabled={bookingLoading || !clinic.services || clinic.services.length === 0 || !selectedShift || !preferredTime}
                 activeOpacity={0.8}
               >
                 {bookingLoading ? (

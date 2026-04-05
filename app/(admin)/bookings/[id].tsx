@@ -139,16 +139,16 @@ export default function BookingDetails() {
             </View>
 
             <View style={styles.actionSection}>
-                {(booking.playerId || booking.parentId) && (
+                {(booking.playerId || booking.parentId || booking.academyId) && (
                     <TouchableOpacity 
                         style={[styles.actionBtn, { backgroundColor: '#36b9cc' }]} 
                         onPress={() => {
-                            const chatUserId = booking.playerId || booking.parentId;
-                            const chatUserName = booking.customerName || booking.playerName || booking.parentName || 'User';
+                            const chatUserId = booking.playerId || booking.parentId || booking.academyId;
+                            const chatUserName = booking.customerName || booking.playerName || booking.parentName || booking.academyName || 'User';
                             router.push(`/(admin)/user-chat?otherUserId=${chatUserId}&name=${encodeURIComponent(chatUserName)}`);
                         }}
                     >
-                        <Text style={styles.actionBtnText}>Chat with Player/Parent</Text>
+                        <Text style={styles.actionBtnText}>Chat with User</Text>
                     </TouchableOpacity>
                 )}
                 <TouchableOpacity style={[styles.actionBtn, { backgroundColor: '#4e73df' }]} onPress={openProposePicker}>

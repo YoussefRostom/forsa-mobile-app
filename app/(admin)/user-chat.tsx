@@ -61,9 +61,11 @@ export default function AdminUserChat() {
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={90}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}><Ionicons name="arrow-back" size={22} color="#fff" /></TouchableOpacity>
-        <Text style={styles.title}>{name || 'Chat'}</Text>
-        <View />
+        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} accessibilityLabel="Back">
+          <Ionicons name="arrow-back" size={24} color="#fff" />
+        </TouchableOpacity>
+        <Text style={styles.title} numberOfLines={1}>{name || 'Chat'}</Text>
+        <View style={{ width: 44 }} />
       </View>
 
       {loading ? (
@@ -104,9 +106,22 @@ export default function AdminUserChat() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
-  header: { height: 80, backgroundColor: '#000', flexDirection: 'row', alignItems: 'flex-end', paddingBottom: 12, justifyContent: 'space-between', paddingHorizontal: 12 },
-  backBtn: { width:44, height:44, justifyContent:'center', alignItems:'center' },
-  title: { color: '#fff', fontSize: 18, fontWeight: '600' },
+  header: {
+    backgroundColor: '#000',
+    paddingTop: Platform.OS === 'ios' ? 60 : 40,
+    paddingBottom: 16,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  backBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(255, 255, 255, 0.15)', justifyContent: 'center', alignItems: 'center' },
+  title: { color: '#fff', fontSize: 20, fontWeight: 'bold', flex: 1, textAlign: 'center', marginHorizontal: 12 },
   bubble: { maxWidth: '80%', padding: 12, borderRadius: 18, marginBottom: 10 },
   bubbleSent: { backgroundColor: '#000', alignSelf: 'flex-end' },
   bubbleReceived: { backgroundColor: '#eee', alignSelf: 'flex-start' },

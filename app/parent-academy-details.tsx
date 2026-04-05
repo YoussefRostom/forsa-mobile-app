@@ -5,7 +5,7 @@ import React, { useRef, useState, useEffect } from 'react';
 import { Alert, Animated, Easing, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View, ActivityIndicator } from 'react-native';
 import i18n from '../locales/i18n';
 import { auth, db } from '../lib/firebase';
-import { doc, getDoc, collection, addDoc } from 'firebase/firestore';
+import { doc, getDoc, collection, addDoc, query, where, getDocs } from 'firebase/firestore';
 import { notifyProviderAndAdmins, createNotification } from '../services/NotificationService';
 
 export default function ParentAcademyDetailsScreen() {
@@ -17,6 +17,7 @@ export default function ParentAcademyDetailsScreen() {
   const [selectedAge, setSelectedAge] = useState<string>('');
   const [ageModalVisible, setAgeModalVisible] = useState(false);
   const [bookingLoading, setBookingLoading] = useState(false);
+  const [programs, setPrograms] = useState<any[]>([]);
 
   useEffect(() => {
     Animated.timing(fadeAnim, {
@@ -48,8 +49,26 @@ export default function ParentAcademyDetailsScreen() {
           desc: data.description, // UI uses desc
           fees: data.fees || {},
           contact: data.phone,
-          email: data.email
         });
+
+        try {
+          const programsQuery = query(
+            collection(db, 'academy_programs'),
+            where('academyId', '==', docSnap.id)
+          );
+          const programsSnapshot = await getDocs(programsQuery);
+          const programsData = programsSnapshot.docs
+            .map((d: any) => ({
+              id: d.id,
+              ...d.data(),
+            }))
+            .filter((prog: any) => prog.isActive !== false);
+          setPrograms(programsData);
+        } catch (programError) {
+          console.error('Error fetching programs:', programError);
+          setPrograms([]);
+        }
+
       } else {
       }
     } catch (error) {
@@ -146,6 +165,82 @@ export default function ParentAcademyDetailsScreen() {
     } catch (error) {
       console.error('Error creating academy booking:', error);
       Alert.alert(i18n.t('error'), i18n.t('bookingFailed') || 'Failed to create booking');
+    } finally {
+      setBookingLoading(false);
+    }
+  };
+
+  const handleBookPrivateTraining = async (program: any) => {
+    const user = auth.currentUser;
+    if (!user) {
+      Alert.alert(i18n.t('error'), i18n.t('loginRequired') || 'You must be logged in to book');
+      return;
+    }
+
+    try {
+      setBookingLoading(true);
+
+      // Fetch user name from Firestore
+      let playerName = user.displayName || 'Parent';
+      try {
+        const userDoc = await getDoc(doc(db, 'users', user.uid));
+        if (userDoc.exists()) {
+          const userData = userDoc.data();
+          playerName = userData.name || `${userData.firstName || ''} ${userData.lastName || ''}`.trim() || playerName;
+        }
+      } catch (err) {
+      }
+
+      const bookingData = {
+        parentId: user.uid,
+        playerName: playerName,
+        customerName: playerName,
+        providerId: academy!.id,
+        providerName: academy!.name,
+        type: 'academy',
+        programId: program.id,
+        status: 'pending',
+        date: new Date().toISOString().split('T')[0],
+        createdAt: new Date().toISOString(),
+        name: academy!.name,
+        city: academy!.city,
+        program: program.name,
+        coachName: program.coachName,
+        sessionType: 'private',
+        price: Number(program.fee),
+        duration: program.duration,
+      };
+
+      const bookingRef = await addDoc(collection(db, 'bookings'), bookingData);
+      const providerId = academy!.id;
+      try {
+        await notifyProviderAndAdmins(
+          providerId,
+          i18n.t('newBookingRequest') || 'New booking request',
+          `${playerName} ${i18n.t('requestedPrivateTraining') || 'requested private training'}: ${program.name}`,
+          'booking',
+          { bookingId: bookingRef.id },
+          user.uid
+        );
+        await createNotification({
+          userId: user.uid,
+          title: i18n.t('bookingRequestSent') || 'Booking request sent',
+          body: `${academy!.name} – ${program.name} with ${program.coachName}`,
+          type: 'booking',
+          data: { bookingId: bookingRef.id },
+        });
+      } catch (e) {
+        console.warn('Notification create failed:', e);
+      }
+
+      Alert.alert(
+        i18n.t('bookingRequestSent') || 'Booking Request Sent',
+        i18n.t('privateTrainingBookingDesc') || 'Your private training booking request has been sent. You will be notified once the academy responds.',
+        [{ text: 'OK', onPress: () => router.back() }]
+      );
+    } catch (error) {
+      console.error('Private training booking error:', error);
+      Alert.alert(i18n.t('error'), i18n.t('bookingFailed') || 'Failed to send booking request. Please try again.');
     } finally {
       setBookingLoading(false);
     }
@@ -258,6 +353,53 @@ export default function ParentAcademyDetailsScreen() {
                 </View>
               </View>
             </View>
+
+            {/* Private Training Programs Section */}
+            {programs.length > 0 && (
+              <View style={styles.section}>
+                <View style={styles.sectionHeader}>
+                  <Ionicons name="fitness-outline" size={20} color="#000" />
+                  <Text style={styles.sectionTitle}>{i18n.t('privateTraining') || 'Private Training'}</Text>
+                </View>
+                <View style={styles.programsContainer}>
+                  {programs.filter(p => p.type === 'private_training').map((program) => (
+                    <View key={program.id} style={styles.programCard}>
+                      <View style={styles.programHeader}>
+                        <Text style={styles.programName}>{program.name}</Text>
+                        <Text style={styles.programPrice}>{program.fee} EGP</Text>
+                      </View>
+                      {program.coachName && (
+                        <Text style={styles.programCoach}>Coach: {program.coachName}</Text>
+                      )}
+                      {program.description && (
+                        <Text style={styles.programDescription}>{program.description}</Text>
+                      )}
+                      {program.specializations && program.specializations.length > 0 && (
+                        <View style={styles.specializationsContainer}>
+                          <Text style={styles.specializationsLabel}>{i18n.t('specializations') || 'Specializations'}:</Text>
+                          <Text style={styles.specializationsText}>{program.specializations.join(', ')}</Text>
+                        </View>
+                      )}
+                      <View style={styles.programDetails}>
+                        <Text style={styles.programDetail}>
+                          <Ionicons name="time-outline" size={14} color="#666" /> {program.duration} min
+                        </Text>
+                        <Text style={styles.programDetail}>
+                          <Ionicons name="people-outline" size={14} color="#666" /> Max {program.maxParticipants}
+                        </Text>
+                      </View>
+                      <TouchableOpacity
+                        style={styles.bookProgramButton}
+                        onPress={() => handleBookPrivateTraining(program)}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.bookProgramButtonText}>{i18n.t('bookNow') || 'Book Now'}</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            )}
 
             {/* Age Selection for Booking */}
             <View style={styles.bookingSection}>
@@ -639,6 +781,101 @@ const styles = StyleSheet.create({
   },
   modalOptionPriceSelected: {
     color: '#fff',
+    fontWeight: 'bold',
+  },
+  section: {
+    marginBottom: 32,
+    marginTop: 20
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+    gap: 8,
+  },
+  sectionTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#fff',
+    marginBottom: 12,
+  },
+  programsContainer: {
+    gap: 16,
+  },
+  programCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 20,
+    borderWidth: 2,
+    borderColor: '#f0f0f0',
+  },
+  programHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  programName: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#000',
+    flex: 1,
+  },
+  programPrice: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#10b981',
+    marginLeft: 8,
+  },
+  programCoach: {
+    fontSize: 16,
+    color: '#333',
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  programDescription: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 12,
+    lineHeight: 20,
+  },
+  specializationsContainer: {
+    backgroundColor: '#f8f8f8',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 16,
+  },
+  specializationsLabel: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#666',
+    marginBottom: 4,
+  },
+  specializationsText: {
+    fontSize: 14,
+    color: '#333',
+  },
+  programDetails: {
+    flexDirection: 'row',
+    gap: 16,
+    marginBottom: 20,
+  },
+  programDetail: {
+    fontSize: 14,
+    color: '#666',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  bookProgramButton: {
+    backgroundColor: '#000',
+    borderRadius: 12,
+    padding: 16,
+    alignItems: 'center',
+  },
+  bookProgramButtonText: {
+    color: '#fff',
+    fontSize: 16,
     fontWeight: 'bold',
   },
 });

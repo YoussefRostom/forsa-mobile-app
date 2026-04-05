@@ -7,7 +7,7 @@ import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import i18n from '../locales/i18n';
 import { db, auth } from '../lib/firebase';
-import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
+import { collection, query, where, getDocs, updateDoc, doc, orderBy } from 'firebase/firestore';
 import { startConversationWithUser } from '../services/BookingMessagingService';
 import { findAdminUserId } from '../services/MessagingService';
 
@@ -32,6 +32,7 @@ type BookingItem = {
   sessionType?: 'group' | 'private' | 'semiPrivate';
   trainerId?: string;
   trainerName?: string;
+  proposedByAdmin?: boolean;
 };
 
 export default function AcademyBookingsScreen() {
@@ -82,6 +83,7 @@ export default function AcademyBookingsScreen() {
             sessionType: d.sessionType,
             trainerId: d.trainerId,
             trainerName: d.trainerName,
+            proposedByAdmin: d.proposedByAdmin,
           });
         });
       } catch (err) {
@@ -107,8 +109,10 @@ export default function AcademyBookingsScreen() {
             doctor: d.doctor,
             service: d.service,
             date: d.date,
+            time: d.time,
             price: d.price,
             customerName: d.customerName,
+            proposedByAdmin: d.proposedByAdmin,
           });
         });
       } catch (err) {
@@ -144,6 +148,26 @@ export default function AcademyBookingsScreen() {
     return null;
   };
 
+  const handleAcceptTiming = async (bookingId: string) => {
+    try {
+      await updateDoc(doc(db, 'bookings', bookingId), { status: 'player_accepted' });
+      Alert.alert(i18n.t('success') || 'Success', 'Timing accepted successfully');
+      setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, status: 'player_accepted' } : b));
+    } catch (err: any) {
+      Alert.alert('Error', 'Failed to accept timing');
+    }
+  };
+
+  const handleRejectTiming = async (bookingId: string) => {
+    try {
+      await updateDoc(doc(db, 'bookings', bookingId), { status: 'player_rejected' });
+      Alert.alert(i18n.t('success') || 'Success', 'Timing rejected successfully');
+      setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, status: 'player_rejected' } : b));
+    } catch (err: any) {
+      Alert.alert('Error', 'Failed to reject timing');
+    }
+  };
+
   useEffect(() => {
     Animated.timing(fadeAnim, {
       toValue: 1,
@@ -163,9 +187,15 @@ export default function AcademyBookingsScreen() {
     switch (status) {
       case 'confirmed':
         return '#10b981';
+      case 'player_accepted':
+        return '#10b981';
       case 'pending':
         return '#f59e0b';
+      case 'timing_proposed':
+        return '#f59e0b';
       case 'cancelled':
+        return '#ef4444';
+      case 'player_rejected':
         return '#ef4444';
       default:
         return '#666';
@@ -176,10 +206,16 @@ export default function AcademyBookingsScreen() {
     switch (status) {
       case 'confirmed':
         return i18n.t('confirmed') || 'Confirmed';
+      case 'player_accepted':
+        return i18n.t('accepted') || 'Accepted';
       case 'pending':
         return i18n.t('pending') || 'Pending';
+      case 'timing_proposed':
+        return i18n.t('timingProposed') || 'Timing Proposed';
       case 'cancelled':
         return i18n.t('cancelled') || 'Cancelled';
+      case 'player_rejected':
+        return i18n.t('rejected') || 'Rejected';
       default:
         return status;
     }
@@ -250,7 +286,7 @@ export default function AcademyBookingsScreen() {
               contentContainerStyle={styles.scrollContent}
               showsVerticalScrollIndicator={false}
               refreshControl={
-                <RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchBookings(); }} tint="#fff" />
+                <RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchBookings(); }} tintColor="#fff" />
               }
             >
               {filteredBookings.length === 0 ? (
@@ -316,6 +352,12 @@ export default function AcademyBookingsScreen() {
                           <Text style={styles.detailText}>{booking.date}</Text>
                         </View>
                       )}
+                      {booking.time && (
+                        <View style={styles.detailRow}>
+                          <Ionicons name="time" size={18} color="rgba(255,255,255,0.7)" />
+                          <Text style={styles.detailText}>{booking.time}</Text>
+                        </View>
+                      )}
                     </View>
 
                     <View style={styles.bookingFooter}>
@@ -323,6 +365,25 @@ export default function AcademyBookingsScreen() {
                       <Text style={styles.priceValue}>{booking.price != null ? `${booking.price} EGP` : '—'}</Text>
                     </View>
                     
+                    {booking.status === 'timing_proposed' && booking.proposedByAdmin && booking.type === 'clinic' && (
+                      <View style={{flexDirection: 'row', gap: 12, marginTop: 12}}>
+                        <TouchableOpacity
+                          style={[styles.chatButton, {flex: 1, backgroundColor: '#10b981', marginTop: 0}]}
+                          onPress={() => handleAcceptTiming(booking.id)}
+                        >
+                          <Ionicons name="checkmark" size={18} color="#fff" />
+                          <Text style={[styles.chatButtonText, {color: '#fff', marginLeft: 8}]}>{i18n.t('accept') || 'Accept'}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.chatButton, {flex: 1, backgroundColor: '#ef4444', marginTop: 0}]}
+                          onPress={() => handleRejectTiming(booking.id)}
+                        >
+                          <Ionicons name="close" size={18} color="#fff" />
+                          <Text style={[styles.chatButtonText, {color: '#fff', marginLeft: 8}]}>{i18n.t('reject') || 'Reject'}</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+
                     <TouchableOpacity
                       style={styles.chatButton}
                       onPress={async () => {
@@ -495,4 +556,20 @@ const styles = StyleSheet.create({
   },
   priceLabel: { fontSize: 16, color: 'rgba(255, 255, 255, 0.7)' },
   priceValue: { fontSize: 20, fontWeight: 'bold', color: '#fff' },
+  chatButton: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 12,
+    gap: 8,
+  },
+  chatButtonText: {
+    color: '#000',
+    fontSize: 14,
+    fontWeight: '600',
+  },
 });

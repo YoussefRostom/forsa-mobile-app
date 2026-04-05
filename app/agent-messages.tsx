@@ -167,35 +167,41 @@ export default function AgentMessagesScreen() {
         <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
       {/* Header */}
           <View style={styles.header}>
-            <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-              <Ionicons name="arrow-back" size={24} color="#fff" />
-        </TouchableOpacity>
+            <View style={styles.headerTopRow}>
+              <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+                <Ionicons name="arrow-back" size={24} color="#fff" />
+              </TouchableOpacity>
+              
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <TouchableOpacity 
+                  onPress={async () => {
+                    try {
+                      const adminId = await findAdminUserId();
+                      if (!adminId) { Alert.alert('No admin found'); return; }
+                      const convId = await getOrCreateConversation(adminId);
+                      router.push({ pathname: '/agent-messages', params: { conversationId: convId, otherUserId: adminId, name: 'Admin' } });
+                    } catch (err) { console.error(err); }
+                  }}
+                >
+                  <View style={styles.textAdminBtn}>
+                    <Ionicons name="chatbubble-ellipses-outline" size={16} color="#fff" style={{marginRight: 6}} />
+                    <Text style={styles.textAdminText}>Text Admin</Text>
+                  </View>
+                </TouchableOpacity>
+                
+                <TouchableOpacity 
+                  style={styles.usersButton} 
+                  onPress={() => setShowUsersList(true)}
+                >
+                  <Ionicons name="people" size={24} color="#fff" />
+                </TouchableOpacity>
+              </View>
+            </View>
             <View style={styles.headerContent}>
               <Text style={styles.headerTitle}>{name || i18n.t('player') || 'Player'}</Text>
               <Text style={styles.headerSubtitle}>{i18n.t('chatting') || 'Chatting'}</Text>
-        </View>
-            <TouchableOpacity 
-              style={[styles.usersButton, { marginRight: 8 }]} 
-              onPress={async () => {
-                try {
-                  const adminId = await findAdminUserId();
-                  if (!adminId) { Alert.alert('No admin found'); return; }
-                  const convId = await getOrCreateConversation(adminId);
-                  router.push({ pathname: '/agent-messages', params: { conversationId: convId, otherUserId: adminId, name: 'Admin' } });
-                } catch (err) { console.error(err); }
-              }}
-            >
-              <View style={{ backgroundColor: 'transparent', borderRadius: 16, paddingHorizontal: 8, paddingVertical: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' }}>
-                <Text style={{ color: '#fff', fontWeight: '600' }}>Text Admin</Text>
-              </View>
-            </TouchableOpacity>
-            <TouchableOpacity 
-              style={styles.usersButton} 
-              onPress={() => setShowUsersList(true)}
-            >
-              <Ionicons name="people" size={24} color="#fff" />
-            </TouchableOpacity>
-      </View>
+            </View>
+          </View>
 
       {/* Chat Area */}
       {loading ? (
@@ -328,8 +334,12 @@ const styles = StyleSheet.create({
     paddingTop: Platform.OS === 'ios' ? 60 : 40,
     paddingHorizontal: 24,
     paddingBottom: 16,
+  },
+  headerTopRow: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
+    marginBottom: 12,
   },
   backButton: {
     width: 44,
@@ -338,13 +348,24 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.1)',
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 16,
   },
   headerContent: {
-    flex: 1,
     alignItems: 'center',
-    marginLeft: -44, // Negative margin to center title while keeping back button on left
-    paddingHorizontal: 44, // Add padding to ensure title doesn't overlap with back button
+  },
+  textAdminBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
+  },
+  textAdminText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 14,
   },
   usersButton: {
     width: 44,

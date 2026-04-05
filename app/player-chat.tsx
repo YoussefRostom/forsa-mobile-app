@@ -30,18 +30,46 @@ const styles = StyleSheet.create({
   input: { flex: 1, borderWidth: 1.5, borderColor: '#bbb', borderRadius: 22, padding: 18, marginRight: 12, color: '#000', backgroundColor: '#fff', fontSize: 17 },
   sendBtn: { backgroundColor: '#000', borderRadius: 22, paddingVertical: 16, paddingHorizontal: 28, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: '#bbb' },
   sendBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 17 },
-  hamburgerBarAbsolute: {
-    position: 'absolute',
-    left: 12,
-    zIndex: 2,
-    padding: 0,
-    backgroundColor: 'transparent',
-    marginRight: 0,
-    height: 44,
-    width: 44,
-    justifyContent: 'center',
+  headerBar: {
+    backgroundColor: '#000',
+    paddingTop: Platform.OS === 'ios' ? 60 : 40,
+    paddingBottom: 16,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
     alignItems: 'center',
-    top: 64, // Lowered hamburger menu by ~3cm more for better vertical alignment
+    justifyContent: 'space-between',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  backBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerTitleContainer: {
+    flex: 1,
+    alignItems: 'center',
+    paddingHorizontal: 12,
+  },
+  headerTitle: {
+    color: '#fff',
+    fontSize: 20,
+    fontWeight: 'bold',
+    textAlign: 'center',
+  },
+  hamburgerBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });
 
@@ -184,18 +212,26 @@ export default function PlayerChatScreen() {
       keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
     >
       {/* Unified Header */}
-      <View style={CommonStyles.titleBar}>
-        <View style={{ justifyContent: 'center', alignItems: 'center', position: 'relative', width: '100%' }}>
-          <TouchableOpacity style={{ position: 'absolute', left: 12, top: 0, bottom: 0, justifyContent: 'center', zIndex: 2 }} onPress={openMenu}>
-            <View style={styles.hamburgerBox}>
-              <View style={styles.line} />
-              <View style={styles.line} />
-              <View style={styles.line} />
-            </View>
-          </TouchableOpacity>
-          <Text style={[CommonStyles.titleText, { alignSelf: 'center' }]} numberOfLines={1} ellipsizeMode="tail">{name || i18n.t('chat') || 'Chat'}</Text>
-          {/* admin shortcut removed from chat screen */}
+      <View style={styles.headerBar}>
+        <TouchableOpacity 
+          style={styles.backBtn} 
+          onPress={() => router.back()} 
+          accessibilityLabel="Back"
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <Ionicons name="arrow-back" size={24} color="#fff" />
+        </TouchableOpacity>
+        <View style={styles.headerTitleContainer}>
+          <Text style={styles.headerTitle} numberOfLines={1} ellipsizeMode="tail">{name || i18n.t('chat') || 'Chat'}</Text>
         </View>
+        <TouchableOpacity 
+          style={styles.hamburgerBtn} 
+          onPress={openMenu} 
+          accessibilityLabel="Open menu"
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <Ionicons name="menu" size={24} color="#fff" />
+        </TouchableOpacity>
       </View>
       <HamburgerMenu />
       {/* Chat Messages */}

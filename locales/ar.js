@@ -238,6 +238,7 @@ export default {
   loading: "جارٍ الإرسال...",
   requiredFields: "اكمل الخانات المطلوبه",
   parentSignup: "تسجيل ولي الأمر",
+  parent: "ولي الأمر",
   parentName: "اسم ولي الأمر",
   phone: "رقم الهاتف",
   email: "البريد الإلكتروني",

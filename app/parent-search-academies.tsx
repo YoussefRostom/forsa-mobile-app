@@ -285,24 +285,6 @@ export default function ParentSearchAcademiesScreen() {
                     </View>
                   </View>
                 </TouchableOpacity>
-                {item.privateTraining && (
-                  <TouchableOpacity
-                    style={styles.privateTrainingCard}
-                    onPress={() => router.push({ pathname: '/parent-private-training-details', params: { id: item.privateTraining.id } })}
-                    activeOpacity={0.8}
-                  >
-                    <LinearGradient colors={['#1a1a1a', '#000000']} style={styles.privateTrainingGradient}>
-                      <View style={styles.privateCardHeader}>
-                        <Ionicons name="star" size={20} color="#f6c23e" />
-                        <Text style={styles.privateCardTitle}>Private Training Available</Text>
-                      </View>
-                      <Text style={styles.privateCardCoach}>Coach: {item.privateTraining.coachName}</Text>
-                      {item.privateTraining.fee && (
-                        <Text style={styles.privateCardPrice}>Price: {item.privateTraining.fee} EGP</Text>
-                      )}
-                    </LinearGradient>
-                  </TouchableOpacity>
-                )}
               </>
               )}
               ListEmptyComponent={

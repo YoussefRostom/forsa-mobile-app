@@ -166,6 +166,7 @@ export default {
   loading: "Submitting...",
   requiredFields: " Fill Required Fields",
   parentSignup: "Parent Sign Up",
+  parent: "Parent",
   parentName: "Parent Name",
   phone: "Phone Number",
   email: "Email Address",
