@@ -4,7 +4,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { collection, onSnapshot, query, where, orderBy } from 'firebase/firestore';
 import React, { useRef, useState, useEffect } from 'react';
 import { ActivityIndicator, Animated, Easing, FlatList, Image, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { Video, ResizeMode } from 'expo-av';
+import { Video, ResizeMode } from 'expo-video';
 import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import PostActionsMenu from '../components/PostActionsMenu';
@@ -187,7 +187,9 @@ export default function AgentUserPostsScreen() {
                       {/* Dark strip with photo */}
                       <View style={styles.heroStrip}>
                         {profileData.profilePhoto ? (
-                          <Image source={{ uri: profileData.profilePhoto }} style={styles.heroPhoto} />
+                          profileData.profilePhoto !== '' ? (
+                            <Image source={{ uri: profileData.profilePhoto }} style={styles.heroPhoto} />
+                          ) : null
                         ) : (
                           <View style={styles.heroPhotoPlaceholder}>
                             <Ionicons name="person" size={44} color="rgba(255,255,255,0.4)" />
@@ -240,16 +242,16 @@ export default function AgentUserPostsScreen() {
                             onPress={() => setFullScreenMedia({ uri: post.mediaUrl, type: post.mediaType === 'video' ? 'video' : 'image' })}
                             activeOpacity={0.85}
                           >
-                            {post.mediaType === 'video' ? (
+                            {post.mediaType === 'video' && post.mediaUrl ? (
                               <View style={styles.footageVideoPlaceholder}>
                                 <Ionicons name="play-circle" size={38} color="rgba(255,255,255,0.9)" />
                                 <View style={styles.footageVideoChip}>
                                   <Ionicons name="videocam" size={10} color="#fff" />
                                 </View>
                               </View>
-                            ) : (
+                            ) : post.mediaType === 'image' && post.mediaUrl ? (
                               <Image source={{ uri: post.mediaUrl }} style={styles.footageImage} />
-                            )}
+                            ) : null}
                           </TouchableOpacity>
                         ))}
                       </ScrollView>

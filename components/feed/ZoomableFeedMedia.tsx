@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { ResizeMode, Video } from 'expo-av';
+import { ResizeMode, Video } from 'expo-video';
 import React, { memo, useMemo, useState } from 'react';
 import {
   Image,
@@ -141,7 +141,7 @@ function ZoomableStage({ item }: { item: FeedMediaItem }) {
   return (
     <GestureDetector gesture={mediaGesture}>
       <Animated.View style={[styles.viewerMediaShell, animatedStyle]}>
-        {item.type === 'video' ? (
+        {item.type === 'video' && item.uri ? (
           <Video
             source={{ uri: item.uri }}
             style={styles.viewerMedia}
@@ -149,9 +149,9 @@ function ZoomableStage({ item }: { item: FeedMediaItem }) {
             resizeMode={ResizeMode.CONTAIN}
             isLooping={false}
           />
-        ) : (
+        ) : item.type === 'image' && item.uri ? (
           <Image source={{ uri: item.uri }} style={styles.viewerMedia} resizeMode="contain" />
-        )}
+        ) : null}
       </Animated.View>
     </GestureDetector>
   );
@@ -197,7 +197,7 @@ function ZoomableFeedMedia({ post }: { post: any }) {
         setViewerVisible(true);
       }}
     >
-      {item.type === 'video' ? (
+      {item.type === 'video' && item.uri ? (
         <Video
           source={{ uri: item.uri }}
           style={styles.previewMedia}
@@ -205,14 +205,14 @@ function ZoomableFeedMedia({ post }: { post: any }) {
           resizeMode={ResizeMode.COVER}
           isLooping={false}
         />
-      ) : (
+      ) : item.type === 'image' && item.uri ? (
         <Image
           source={{ uri: item.uri }}
           style={styles.previewMedia}
           resizeMode="cover"
           onLoad={(event) => handleImageLoad(item, event)}
         />
-      )}
+      ) : null}
 
       <View style={styles.previewOverlay}>
         <View style={styles.expandBadge}>

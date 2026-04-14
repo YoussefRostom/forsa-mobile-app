@@ -4,7 +4,7 @@ import { useRouter } from 'expo-router';
 import { collection, onSnapshot, getFirestore, orderBy, query, where } from 'firebase/firestore';
 import React, { useRef, useState } from 'react';
 import { ActivityIndicator, Animated, Easing, FlatList, Image, KeyboardAvoidingView, Modal, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { Video, ResizeMode } from 'expo-av';
+import { Video, ResizeMode } from 'expo-video';
 import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import PostActionsMenu from '../components/PostActionsMenu';
