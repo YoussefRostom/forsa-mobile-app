@@ -1,5 +1,6 @@
 import React from 'react';
 import { FlatList, Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import i18n from '../locales/i18n';
 
 interface SimpleSelectProps {
   visible: boolean;
@@ -12,8 +13,10 @@ interface SimpleSelectProps {
 }
 
 export default function SimpleSelect({ visible, options, selected, onSelect, onClose, label, getLabel }: SimpleSelectProps) {
-  // If label is 'Date of Birth', show 'Age' instead
-  const displayLabel = label === 'Date of Birth' || label === 'تاريخ الميلاد' ? 'Age' : label;
+  // If label is 'Date of Birth', show the localized age label instead
+  const displayLabel = label === 'Date of Birth' || label === 'تاريخ الميلاد'
+    ? (i18n.t('age') || 'Age')
+    : label;
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={onClose}>

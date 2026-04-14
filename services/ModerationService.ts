@@ -2,6 +2,7 @@ import { auth, db } from '../lib/firebase';
 import { doc, updateDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 import { cleanupMediaForPost } from './MediaService';
 import { createNotification } from './NotificationService';
+import { logAdminAction } from './AdminOpsService';
 
 /**
  * Remove a post (soft delete)
@@ -22,6 +23,14 @@ export async function removePost(postId: string, adminId: string, note?: string)
       status: 'deleted',
       deletedAt: serverTimestamp(),
       deletedBy: adminId,
+    });
+
+    await logAdminAction({
+      actionType: 'content_removed',
+      targetCollection: 'posts',
+      targetId: postId,
+      reason: note || 'Post removed by moderation',
+      actorId: adminId,
     });
 
     // Notify post owner that their post was removed
@@ -65,6 +74,15 @@ export async function suspendUser(userId: string, adminId: string, reason: strin
       suspendedAt: serverTimestamp(),
       suspendedBy: adminId,
       suspensionReason: reason,
+      status: 'suspended',
+    });
+
+    await logAdminAction({
+      actionType: 'user_suspended',
+      targetCollection: 'users',
+      targetId: userId,
+      reason: reason || 'User suspended by admin',
+      actorId: adminId,
     });
 
     // Notify user that account was suspended
@@ -98,6 +116,15 @@ export async function unsuspendUser(userId: string, adminId: string, note?: stri
       suspendedAt: null,
       suspendedBy: null,
       suspensionReason: null,
+      status: 'active',
+    });
+
+    await logAdminAction({
+      actionType: 'user_unsuspended',
+      targetCollection: 'users',
+      targetId: userId,
+      reason: note || 'User reactivated by admin',
+      actorId: adminId,
     });
 
     // Notify user that account was reactivated

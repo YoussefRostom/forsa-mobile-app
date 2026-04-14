@@ -6,10 +6,13 @@ import { Animated, Easing, FlatList, KeyboardAvoidingView, Platform, StyleSheet,
 import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import i18n from '../locales/i18n';
+import { getBookingStatusMeta } from '../lib/bookingStatus';
+import { notifyBookingStatusChange } from '../lib/bookingNotifications';
 import { db, auth } from '../lib/firebase';
-import { collection, query, where, getDocs, updateDoc, doc, orderBy } from 'firebase/firestore';
+import { collection, query, where, getDocs, updateDoc, doc } from 'firebase/firestore';
 import { startConversationWithUser } from '../services/BookingMessagingService';
 import { findAdminUserId } from '../services/MessagingService';
+import { upsertBookingTransaction } from '../services/MonetizationService';
 
 export default function ParentBookingsScreen() {
   const { openMenu } = useHamburgerMenu();
@@ -19,6 +22,7 @@ export default function ParentBookingsScreen() {
   const [bookings, setBookings] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [actionLoading, setActionLoading] = useState<{ id: string; type: 'cancel' | 'accept' | 'reject' } | null>(null);
 
   useEffect(() => {
     Animated.timing(fadeAnim, {
@@ -31,6 +35,17 @@ export default function ParentBookingsScreen() {
     fetchBookings();
   }, []);
 
+  const getBookingSortTime = (booking: any): number => {
+    const source = booking?.updatedAt ?? booking?.createdAt;
+    if (!source) return 0;
+    if (typeof source?.toDate === 'function') {
+      return source.toDate().getTime();
+    }
+    if (typeof source === 'number') return source;
+    const parsed = new Date(source).getTime();
+    return Number.isNaN(parsed) ? 0 : parsed;
+  };
+
   const fetchBookings = async () => {
     try {
       const user = auth.currentUser;
@@ -39,11 +54,9 @@ export default function ParentBookingsScreen() {
         return;
       }
 
-      // Try the optimized query (requires index)
       const q = query(
         collection(db, 'bookings'),
-        where('parentId', '==', user.uid),
-        orderBy('createdAt', 'desc')
+        where('parentId', '==', user.uid)
       );
 
       const querySnapshot = await getDocs(q);
@@ -52,73 +65,78 @@ export default function ParentBookingsScreen() {
         bookingsList.push({ id: doc.id, ...doc.data() });
       });
 
+      bookingsList.sort((a, b) => getBookingSortTime(b) - getBookingSortTime(a));
+
       setBookings(bookingsList);
     } catch (error: any) {
-      // Handle the missing index error gracefully
-      if (error.code === 'failed-precondition' || error.message?.includes('index')) {
-        console.warn('Firestore index required for orderBy. Falling back to client-side sorting.');
-        try {
-          const user = auth.currentUser;
-          if (user) {
-            // Fallback query without orderBy (no index required)
-            const qFallback = query(
-              collection(db, 'bookings'),
-              where('parentId', '==', user.uid)
-            );
-            const querySnapshot = await getDocs(qFallback);
-            const bookingsList: any[] = [];
-            querySnapshot.forEach((doc) => {
-              bookingsList.push({ id: doc.id, ...doc.data() });
-            });
-
-            // Client-side sort by createdAt descending
-            bookingsList.sort((a, b) => {
-              const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-              const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-              return timeB - timeA;
-            });
-
-            setBookings(bookingsList);
-          }
-        } catch (fallbackError) {
-          console.error("Fallback fetch also failed:", fallbackError);
-          Alert.alert(i18n.t('error'), 'Failed to load bookings');
-        }
-      } else {
-        console.error('Error fetching bookings:', error);
-        Alert.alert(i18n.t('error'), 'Failed to load bookings');
-      }
+      console.error('Error fetching bookings:', error);
+      Alert.alert(i18n.t('error'), 'Failed to load bookings');
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
   };
 
-  const handleCancelBooking = async (bookingId: string) => {
+  const runBookingAction = async (
+    bookingId: string,
+    nextStatus: 'cancelled' | 'confirmed',
+    successMessage: string,
+    actionType: 'cancel' | 'accept' | 'reject'
+  ): Promise<boolean> => {
     try {
-      Alert.alert(
-        i18n.t('cancelBooking') || 'Cancel Booking',
-        i18n.t('cancelConfirmation') || 'Are you sure you want to cancel this booking?',
-        [
-          { text: i18n.t('no') || 'No', style: 'cancel' },
-          {
-            text: i18n.t('yes') || 'Yes',
-            style: 'destructive',
-            onPress: async () => {
-              await updateDoc(doc(db, 'bookings', bookingId), {
-                status: 'cancelled'
-              });
-              // Refresh local state
-              setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, status: 'cancelled' } : b));
-              Alert.alert(i18n.t('success'), i18n.t('bookingCancelled') || 'Booking cancelled successfully');
-            }
-          }
-        ]
+      setActionLoading({ id: bookingId, type: actionType });
+      const updatedAt = new Date().toISOString();
+      await updateDoc(doc(db, 'bookings', bookingId), { status: nextStatus, updatedAt });
+      const currentBooking = bookings.find(b => b.id === bookingId);
+      const updatedBooking = currentBooking ? { ...currentBooking, status: nextStatus, updatedAt } : null;
+      setBookings(prev => prev
+        .map(b => b.id === bookingId ? { ...b, status: nextStatus, updatedAt } : b)
+        .sort((a, b) => getBookingSortTime(b) - getBookingSortTime(a))
       );
+      if (updatedBooking) {
+        await upsertBookingTransaction(bookingId, updatedBooking, auth.currentUser?.uid, `Parent updated booking to ${nextStatus}`);
+      }
+      if (currentBooking) {
+        await notifyBookingStatusChange({
+          booking: { ...currentBooking, status: nextStatus },
+          nextStatus,
+          actorId: auth.currentUser?.uid,
+          actorLabel: i18n.t('parent') || 'Parent',
+        });
+      }
+      Alert.alert(i18n.t('success') || 'Success', successMessage);
+      return true;
     } catch (error) {
-      console.error('Error cancelling booking:', error);
-      Alert.alert(i18n.t('error'), 'Failed to cancel booking');
+      console.error('Error updating booking:', error);
+      Alert.alert(i18n.t('error') || 'Error', i18n.t('failedToUpdateBooking') || 'Failed to update booking');
+      return false;
+    } finally {
+      setActionLoading(null);
     }
+  };
+
+  const handleCancelBooking = (bookingId: string) => {
+    if (actionLoading?.id === bookingId) return;
+
+    Alert.alert(
+      i18n.t('cancelBooking') || 'Cancel Booking',
+      i18n.t('cancelConfirmation') || 'Are you sure you want to cancel this booking?',
+      [
+        { text: i18n.t('no') || 'No', style: 'cancel' },
+        {
+          text: i18n.t('yes') || 'Yes',
+          style: 'destructive',
+          onPress: async () => {
+            await runBookingAction(
+              bookingId,
+              'cancelled',
+              i18n.t('bookingCancelled') || 'Booking cancelled successfully',
+              'cancel'
+            );
+          }
+        }
+      ]
+    );
   };
 
   const onRefresh = () => {
@@ -127,66 +145,32 @@ export default function ParentBookingsScreen() {
   };
 
   const handleAcceptTiming = async (bookingId: string) => {
-    try {
-      await updateDoc(doc(db, 'bookings', bookingId), { status: 'player_accepted' });
-      Alert.alert(i18n.t('success') || 'Success', 'Timing accepted successfully');
-      setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, status: 'player_accepted' } : b));
-    } catch (err: any) {
-      Alert.alert('Error', 'Failed to accept timing');
-    }
+    const success = await runBookingAction(bookingId, 'confirmed', i18n.t('timingAcceptedSuccess') || 'Timing accepted successfully', 'accept');
+    if (!success) return;
+
+    const currentBooking = bookings.find(b => b.id === bookingId);
+    if (!currentBooking) return;
+
+    router.push({
+      pathname: '/parent-booking-qr',
+      params: {
+        bookingId,
+        providerName: currentBooking.name || currentBooking.providerName || 'Provider',
+        date: currentBooking.date || '',
+        time: currentBooking.time || '',
+      },
+    });
   };
 
   const handleRejectTiming = async (bookingId: string) => {
-    try {
-      await updateDoc(doc(db, 'bookings', bookingId), { status: 'player_rejected' });
-      Alert.alert(i18n.t('success') || 'Success', 'Timing rejected successfully');
-      setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, status: 'player_rejected' } : b));
-    } catch (err: any) {
-      Alert.alert('Error', 'Failed to reject timing');
-    }
+    await runBookingAction(bookingId, 'cancelled', i18n.t('timingRejectedSuccess') || 'Timing rejected successfully', 'reject');
   };
 
   const filteredBookings = filter === 'all'
     ? bookings
     : bookings.filter(b => b.type === filter);
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'confirmed':
-        return '#10b981';
-      case 'player_accepted':
-        return '#10b981';
-      case 'pending':
-        return '#f59e0b';
-      case 'timing_proposed':
-        return '#f59e0b';
-      case 'cancelled':
-        return '#ef4444';
-      case 'player_rejected':
-        return '#ef4444';
-      default:
-        return '#666';
-    }
-  };
-
-  const getStatusText = (status: string) => {
-    switch (status) {
-      case 'confirmed':
-        return i18n.t('confirmed') || 'Confirmed';
-      case 'player_accepted':
-        return i18n.t('accepted') || 'Accepted';
-      case 'pending':
-        return i18n.t('pending') || 'Pending';
-      case 'timing_proposed':
-        return i18n.t('timingProposed') || 'Timing Proposed';
-      case 'cancelled':
-        return i18n.t('cancelled') || 'Cancelled';
-      case 'player_rejected':
-        return i18n.t('rejected') || 'Rejected';
-      default:
-        return status;
-    }
-  };
+  const getStatusMeta = (status: string) => getBookingStatusMeta(status, i18n);
 
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -200,7 +184,7 @@ export default function ParentBookingsScreen() {
             <TouchableOpacity style={styles.menuButton} onPress={openMenu}>
               <Ionicons name="menu" size={24} color="#fff" />
             </TouchableOpacity>
-            <View style={styles.headerContent}>
+            <View style={styles.headerContent} pointerEvents="box-none">
               <Text style={styles.headerTitle}>{i18n.t('myBookings') || 'My Bookings'}</Text>
               <Text style={styles.headerSubtitle}>{i18n.t('viewAllBookings') || 'View all your clinic and academy bookings'}</Text>
             </View>
@@ -264,11 +248,16 @@ export default function ParentBookingsScreen() {
                     <View style={styles.cardHeaderText}>
                       <Text style={styles.cardTitle}>{item.name}</Text>
                       <View style={styles.statusBadge}>
-                        <View style={[styles.statusDot, { backgroundColor: getStatusColor(item.status) }]} />
-                        <Text style={[styles.statusText, { color: getStatusColor(item.status) }]}>
-                          {getStatusText(item.status)}
+                        <View style={[styles.statusDot, { backgroundColor: getStatusMeta(item.status).color }]} />
+                        <Text style={[styles.statusText, { color: getStatusMeta(item.status).color }]}>
+                          {getStatusMeta(item.status).label}
                         </Text>
                       </View>
+                      {getStatusMeta(item.status).note ? (
+                        <Text style={{ color: '#6b7280', fontSize: 12, marginTop: 6, lineHeight: 18 }}>
+                          {getStatusMeta(item.status).note}
+                        </Text>
+                      ) : null}
                     </View>
                   </View>
 
@@ -305,33 +294,76 @@ export default function ParentBookingsScreen() {
 
                   <View style={styles.cardFooter}>
                     <Text style={styles.priceText}>{item.price} EGP</Text>
-                    {item.status !== 'cancelled' && item.status !== 'player_rejected' && (
-                      <TouchableOpacity style={styles.cancelButton} onPress={() => handleCancelBooking(item.id)}>
-                        <Text style={styles.cancelButtonText}>{i18n.t('cancel') || 'Cancel'}</Text>
+                      {!['cancelled', 'completed', 'no_show', 'refunded', 'failed_payment'].includes(String(item.status || '').toLowerCase()) && (
+                      <TouchableOpacity
+                        style={[styles.cancelButton, { opacity: actionLoading?.id === item.id ? 0.6 : 1 }]}
+                        onPress={() => handleCancelBooking(item.id)}
+                        disabled={actionLoading?.id === item.id}
+                      >
+                        {actionLoading?.id === item.id && actionLoading?.type === 'cancel' ? (
+                          <ActivityIndicator size="small" color="#fff" />
+                        ) : (
+                          <Text style={styles.cancelButtonText}>{i18n.t('cancel') || 'Cancel'}</Text>
+                        )}
                       </TouchableOpacity>
                     )}
                   </View>
 
-                  {item.status === 'timing_proposed' && item.proposedByAdmin && (
+                  {String(item.status || '').toLowerCase() === 'confirmed' && (
+                    <TouchableOpacity
+                      style={[styles.chatButton, { backgroundColor: '#2563eb' }]}
+                      onPress={() =>
+                        router.push({
+                          pathname: '/parent-booking-qr',
+                          params: {
+                            bookingId: item.id,
+                            providerName: item.name || item.providerName || 'Provider',
+                            date: item.date || '',
+                            time: item.time || '',
+                          },
+                        })
+                      }
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons name="qr-code" size={18} color="#fff" />
+                      <Text style={[styles.chatButtonText, { color: '#fff', marginLeft: 8 }]}>Show Booking QR</Text>
+                    </TouchableOpacity>
+                  )}
+
+                  {(item.status === 'new_time_proposed' || item.status === 'timing_proposed') && item.proposedByAdmin && (
                     <View style={{flexDirection: 'row', gap: 12, marginTop: 12}}>
                       <TouchableOpacity
-                        style={[styles.chatButton, {flex: 1, backgroundColor: '#10b981', marginTop: 0}]}
+                        style={[styles.chatButton, {flex: 1, backgroundColor: '#10b981', marginTop: 0, opacity: actionLoading?.id === item.id ? 0.6 : 1 }]}
                         onPress={() => handleAcceptTiming(item.id)}
+                        disabled={actionLoading?.id === item.id}
                       >
-                        <Ionicons name="checkmark" size={18} color="#fff" />
-                        <Text style={[styles.chatButtonText, {color: '#fff', marginLeft: 8}]}>{i18n.t('accept') || 'Accept'}</Text>
+                        {actionLoading?.id === item.id && actionLoading?.type === 'accept' ? (
+                          <ActivityIndicator size="small" color="#fff" />
+                        ) : (
+                          <>
+                            <Ionicons name="checkmark" size={18} color="#fff" />
+                            <Text style={[styles.chatButtonText, {color: '#fff', marginLeft: 8}]}>{i18n.t('accept') || 'Accept'}</Text>
+                          </>
+                        )}
                       </TouchableOpacity>
                       <TouchableOpacity
-                        style={[styles.chatButton, {flex: 1, backgroundColor: '#ef4444', marginTop: 0}]}
+                        style={[styles.chatButton, {flex: 1, backgroundColor: '#ef4444', marginTop: 0, opacity: actionLoading?.id === item.id ? 0.6 : 1 }]}
                         onPress={() => handleRejectTiming(item.id)}
+                        disabled={actionLoading?.id === item.id}
                       >
-                        <Ionicons name="close" size={18} color="#fff" />
-                        <Text style={[styles.chatButtonText, {color: '#fff', marginLeft: 8}]}>{i18n.t('reject') || 'Reject'}</Text>
+                        {actionLoading?.id === item.id && actionLoading?.type === 'reject' ? (
+                          <ActivityIndicator size="small" color="#fff" />
+                        ) : (
+                          <>
+                            <Ionicons name="close" size={18} color="#fff" />
+                            <Text style={[styles.chatButtonText, {color: '#fff', marginLeft: 8}]}>{i18n.t('reject') || 'Reject'}</Text>
+                          </>
+                        )}
                       </TouchableOpacity>
                     </View>
                   )}
 
-                  {item.status === 'player_rejected' && (
+                  {(item.status === 'new_time_proposed' || item.status === 'timing_proposed') && (
                     <TouchableOpacity
                       style={styles.chatButton}
                       onPress={async () => {
@@ -343,7 +375,7 @@ export default function ParentBookingsScreen() {
                           }
                           const conversationId = await startConversationWithUser(adminId);
                           router.push({
-                            pathname: '/academy-chat',
+                            pathname: '/parent-chat',
                             params: {
                               conversationId,
                               otherUserId: adminId,
@@ -372,7 +404,7 @@ export default function ParentBookingsScreen() {
                         }
                         const conversationId = await startConversationWithUser(adminId);
                         router.push({
-                          pathname: '/academy-chat',
+                          pathname: '/parent-chat',
                           params: {
                             conversationId,
                             otherUserId: adminId,
@@ -426,6 +458,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 16,
+    zIndex: 10,
+    elevation: 10,
   },
   headerContent: {
     flex: 1,

@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React, { useRef, useState, useEffect } from 'react';
-import { Animated, Easing, FlatList, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, ActivityIndicator } from 'react-native';
+import { Animated, Easing, FlatList, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, ActivityIndicator, RefreshControl } from 'react-native';
 import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import i18n from '../locales/i18n';
@@ -44,6 +44,8 @@ export default function AcademySearchClinicsScreen() {
   const [price, setPrice] = useState('');
   const [clinics, setClinics] = useState<Clinic[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const router = useRouter();
   const fadeAnim = useRef(new Animated.Value(0)).current;
 
@@ -58,9 +60,14 @@ export default function AcademySearchClinicsScreen() {
     fetchClinics();
   }, []);
 
-  const fetchClinics = async () => {
+  const fetchClinics = async (isRefresh = false) => {
     try {
-      setLoading(true);
+      if (isRefresh) {
+        setRefreshing(true);
+      } else {
+        setLoading(true);
+      }
+      setLoadError(null);
       const clinicsRef = collection(db, 'clinics');
       const q = query(clinicsRef);
       const querySnapshot = await getDocs(q);
@@ -92,7 +99,7 @@ export default function AcademySearchClinicsScreen() {
           clinicName: data.clinicName || 'Unnamed Clinic',
           city: data.city || '',
           address: data.address || '',
-          description: data.description || 'No description available',
+          description: data.description || (i18n.t('noDescriptionAvailable') || 'No description available'),
           services: clinicServices,
           minPrice: minServicePrice === Infinity ? 0 : minServicePrice,
           servicePrices,
@@ -102,8 +109,10 @@ export default function AcademySearchClinicsScreen() {
       setClinics(clinicList);
     } catch (error) {
       console.error('Error fetching clinics:', error);
+      setLoadError(i18n.t('failedLoadClinics') || 'Failed to load clinics. Please try again.');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
@@ -117,13 +126,10 @@ export default function AcademySearchClinicsScreen() {
     const maxPrice = parseInt(price.trim());
     const passes = (
       (!name || c.clinicName.toLowerCase().includes(name.toLowerCase())) &&
-      (!city || c.city === city) &&
+      (!city || String(c.city || '').toLowerCase() === String(city || '').toLowerCase()) &&
       (!service || c.services.includes(service)) &&
       (!price.trim() || isNaN(maxPrice) || currentPrice <= maxPrice)
     );
-    if (!passes && price.trim() && !isNaN(maxPrice)) {
-      console.log('Filtered out clinic:', c.clinicName, 'currentPrice:', currentPrice, 'maxPrice:', maxPrice, 'service:', service);
-    }
     return passes;
   });
 
@@ -265,7 +271,16 @@ export default function AcademySearchClinicsScreen() {
           {loading ? (
             <View style={styles.loadingContainer}>
               <ActivityIndicator size="large" color="#fff" />
-              <Text style={styles.loadingText}>Loading clinics...</Text>
+              <Text style={styles.loadingText}>{i18n.t('loadingClinics') || 'Loading clinics...'}</Text>
+            </View>
+          ) : loadError && clinics.length === 0 ? (
+            <View style={styles.emptyState}>
+              <Ionicons name="alert-circle-outline" size={64} color="#f59e0b" />
+              <Text style={styles.emptyText}>{i18n.t('error') || 'Error'}</Text>
+              <Text style={styles.emptySubtext}>{loadError}</Text>
+              <TouchableOpacity style={styles.retryButton} onPress={() => fetchClinics()} activeOpacity={0.8}>
+                <Text style={styles.retryButtonText}>{i18n.t('retry') || 'Retry'}</Text>
+              </TouchableOpacity>
             </View>
           ) : (
             <FlatList
@@ -273,6 +288,13 @@ export default function AcademySearchClinicsScreen() {
               keyExtractor={item => item.id}
               contentContainerStyle={styles.listContent}
               showsVerticalScrollIndicator={false}
+              refreshControl={
+                <RefreshControl
+                  refreshing={refreshing}
+                  onRefresh={() => fetchClinics(true)}
+                  tintColor="#fff"
+                />
+              }
               renderItem={({ item }) => (
                 <TouchableOpacity
                   onPress={() => router.push({ pathname: '/academy-clinic-details', params: { id: item.id } })}
@@ -287,7 +309,7 @@ export default function AcademySearchClinicsScreen() {
                       <Text style={styles.cardTitle}>{item.clinicName}</Text>
                       <View style={styles.cardLocation}>
                         <Ionicons name="location" size={14} color="#666" />
-                        <Text style={styles.cardCity}>{item.city}</Text>
+                        <Text style={styles.cardCity}>{cities.find(c => c.key === item.city)?.label || item.city}</Text>
                       </View>
                     </View>
                   </View>
@@ -305,7 +327,7 @@ export default function AcademySearchClinicsScreen() {
                 <View style={styles.emptyState}>
                   <Ionicons name="medical-outline" size={64} color="#666" />
                   <Text style={styles.emptyText}>{i18n.t('noClinicsFound') || 'No clinics found'}</Text>
-                  <Text style={styles.emptySubtext}>Try adjusting your filters</Text>
+                  <Text style={styles.emptySubtext}>{i18n.t('tryAdjustingFilters') || 'Try adjusting your filters'}</Text>
                 </View>
               }
             />
@@ -396,4 +418,16 @@ const styles = StyleSheet.create({
   emptyState: { alignItems: 'center', justifyContent: 'center', paddingVertical: 60 },
   emptyText: { fontSize: 18, fontWeight: '600', color: '#fff', marginTop: 16 },
   emptySubtext: { fontSize: 14, color: 'rgba(255, 255, 255, 0.6)', marginTop: 8 },
+  retryButton: {
+    marginTop: 18,
+    backgroundColor: '#fff',
+    borderRadius: 999,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+  },
+  retryButtonText: {
+    fontSize: 14,
+    color: '#111',
+    fontWeight: '700',
+  },
 });

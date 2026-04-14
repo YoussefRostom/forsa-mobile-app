@@ -17,6 +17,7 @@ const AcademyHamburgerMenu: React.FC<AcademyHamburgerMenuProps> = ({ visible, on
       special: true,
     },
     { label: i18n.t('academyFeed') || 'Academy Feed', route: '/academy-feed' },
+    { label: i18n.t('scanCheckIn') || 'Scan Check-in', route: '/scan-checkin' },
     { label: i18n.t('academyEditProfile') || 'Edit Profile', route: '/academy-edit-profile' },
     { label: i18n.t('academyUploadMedia') || 'Upload Media', route: '/academy-upload-media' },
     { label: i18n.t('searchClinics') || 'Search Clinics', route: '/academy-search-clinics' },

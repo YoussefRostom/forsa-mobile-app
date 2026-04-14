@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
-import { FlatList, Image, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View, ActivityIndicator, Alert } from 'react-native';
+import { FlatList, Image, Keyboard, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View, ActivityIndicator, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
@@ -18,18 +18,29 @@ import {
 import { auth } from '../lib/firebase';
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f8f8f8' },
+  container: { flex: 1, backgroundColor: '#f5f5f5' },
   hamburgerBox: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fff', borderRadius: 20, borderWidth: 1, borderColor: '#000' },
   line: { width: 24, height: 3, backgroundColor: '#000', marginVertical: 2, borderRadius: 2 },
-  bubble: { maxWidth: '80%', padding: 14, borderRadius: 22, marginBottom: 12, shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 6, elevation: 2 },
-  bubbleSent: { backgroundColor: '#000', alignSelf: 'flex-end', borderTopRightRadius: 6 },
-  bubbleReceived: { backgroundColor: '#eee', alignSelf: 'flex-start', borderTopLeftRadius: 6 },
-  textSent: { color: '#fff', fontSize: 16, fontWeight: '400', lineHeight: 20 },
-  textReceived: { color: '#222', fontSize: 16, fontWeight: '400', lineHeight: 20 },
-  inputRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', padding: 18, borderTopWidth: 1, borderTopColor: '#bbb', zIndex: 10 },
-  input: { flex: 1, borderWidth: 1.5, borderColor: '#bbb', borderRadius: 22, padding: 18, marginRight: 12, color: '#000', backgroundColor: '#fff', fontSize: 17 },
-  sendBtn: { backgroundColor: '#000', borderRadius: 22, paddingVertical: 16, paddingHorizontal: 28, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: '#bbb' },
+  messageRow: { flexDirection: 'row', alignItems: 'flex-end', marginBottom: 8 },
+  messageRowSent: { justifyContent: 'flex-end' },
+  messageRowReceived: { justifyContent: 'flex-start' },
+  messageAvatar: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#e5e5e5', justifyContent: 'center', alignItems: 'center', marginRight: 8, marginBottom: 8 },
+  messageAvatarImage: { width: 30, height: 30, borderRadius: 15, marginRight: 8, marginBottom: 8 },
+  bubble: { maxWidth: '78%', paddingVertical: 12, paddingHorizontal: 14, borderRadius: 20, shadowColor: '#000000', shadowOpacity: 0.06, shadowRadius: 8, elevation: 2 },
+  bubbleSent: { backgroundColor: '#000000', alignSelf: 'flex-end', borderTopRightRadius: 6 },
+  bubbleReceived: { backgroundColor: '#fff', alignSelf: 'flex-start', borderTopLeftRadius: 6, borderWidth: 1, borderColor: '#e5e7eb' },
+  textSent: { color: '#fff', fontSize: 15, fontWeight: '500', lineHeight: 21 },
+  textReceived: { color: '#111111', fontSize: 15, fontWeight: '500', lineHeight: 21 },
+  inputRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.98)', paddingHorizontal: 14, paddingVertical: 12, borderTopWidth: 1, borderTopColor: '#dcdcdc', zIndex: 10, shadowColor: '#000000', shadowOpacity: 0.06, shadowRadius: 10, elevation: 6 },
+  input: { flex: 1, borderWidth: 1, borderColor: '#d9d9d9', borderRadius: 24, paddingHorizontal: 16, paddingVertical: 14, marginRight: 10, color: '#000000', backgroundColor: '#f5f5f5', fontSize: 16 },
+  sendBtn: { width: 48, height: 48, backgroundColor: '#000000', borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
+  sendBtnDisabled: { opacity: 0.55 },
   sendBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 17 },
+  messageMetaSent: { marginTop: 6, color: 'rgba(255,255,255,0.75)', fontSize: 11, textAlign: 'right' },
+  messageMetaReceived: { marginTop: 6, color: '#6b7280', fontSize: 11, textAlign: 'left' },
+  emptyState: { alignItems: 'center', justifyContent: 'center', paddingVertical: 56, flex: 1 },
+  emptyStateText: { marginTop: 12, color: '#374151', fontSize: 16, fontWeight: '700' },
+  emptyStateSubtext: { marginTop: 6, color: '#6b7280', fontSize: 13, textAlign: 'center' },
   headerBar: {
     backgroundColor: '#000',
     paddingTop: Platform.OS === 'ios' ? 60 : 40,
@@ -63,6 +74,12 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     textAlign: 'center',
   },
+  headerSubtitle: {
+    color: 'rgba(255,255,255,0.72)',
+    fontSize: 12,
+    marginTop: 2,
+    textAlign: 'center',
+  },
   hamburgerBtn: {
     width: 44,
     height: 44,
@@ -88,6 +105,7 @@ export default function PlayerChatScreen() {
   const [sentCount, setSentCount] = useState(0);
   const [limitReached, setLimitReached] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
   const [conversationIdState, setConversationIdState] = useState<string | null>(null);
   const flatListRef = useRef<FlatList>(null);
 
@@ -173,8 +191,12 @@ export default function PlayerChatScreen() {
   }, [messages]);
 
   const handleSendMessage = async () => {
-    if (!input.trim() || !conversationIdState) return;
-    
+    if (sending || !input.trim() || !conversationIdState) return;
+    const message = input.trim();
+    setSending(true);
+    setInput('');
+    Keyboard.dismiss();
+
     // Legacy paywall check for agents
     if (agentId) {
       const now = new Date();
@@ -194,14 +216,13 @@ export default function PlayerChatScreen() {
     }
 
     try {
-      await sendMessage(conversationIdState, input.trim());
-      setInput('');
-      
-      // Mark messages as read after sending
+      await sendMessage(conversationIdState, message);
       await markMessagesAsRead(conversationIdState);
     } catch (error: any) {
       console.error('Error sending message:', error);
       // Optionally show error to user
+    } finally {
+      setSending(false);
     }
   };
 
@@ -223,6 +244,7 @@ export default function PlayerChatScreen() {
         </TouchableOpacity>
         <View style={styles.headerTitleContainer}>
           <Text style={styles.headerTitle} numberOfLines={1} ellipsizeMode="tail">{name || i18n.t('chat') || 'Chat'}</Text>
+          <Text style={styles.headerSubtitle}>{i18n.t('directMessages') || 'Direct messages'}</Text>
         </View>
         <TouchableOpacity 
           style={styles.hamburgerBtn} 
@@ -248,20 +270,41 @@ export default function PlayerChatScreen() {
           renderItem={({ item }) => {
             const currentUserId = auth.currentUser?.uid;
             const isSent = item.senderId === currentUserId;
+            const timeLabel = item.createdAt?.toDate
+              ? new Date(item.createdAt.toDate()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+              : '';
             return (
-              <View style={[styles.bubble, isSent ? styles.bubbleSent : styles.bubbleReceived]}>
-                <Text style={isSent ? styles.textSent : styles.textReceived}>
-                  {item.content || (item.mediaUrl ? 'Media' : '')}
-                </Text>
+              <View style={[styles.messageRow, isSent ? styles.messageRowSent : styles.messageRowReceived]}>
+                {!isSent && (
+                  item.senderPhoto ? (
+                    <Image source={{ uri: item.senderPhoto }} style={styles.messageAvatarImage} />
+                  ) : (
+                    <View style={styles.messageAvatar}>
+                      <Ionicons name="person" size={16} color="#444444" />
+                    </View>
+                  )
+                )}
+                <View style={[styles.bubble, isSent ? styles.bubbleSent : styles.bubbleReceived]}>
+                  <Text style={isSent ? styles.textSent : styles.textReceived}>
+                    {item.content || (item.mediaUrl ? 'Media' : '')}
+                  </Text>
+                  {!!timeLabel && (
+                    <Text style={isSent ? styles.messageMetaSent : styles.messageMetaReceived}>
+                      {timeLabel}{isSent ? ` • ${item.isRead ? (i18n.t('messageSeen') || 'Seen') : (i18n.t('messageSent') || 'Sent')}` : ''}
+                    </Text>
+                  )}
+                </View>
               </View>
             );
           }}
-          contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: 100 }}
-          style={{ flex: 1 }}
+          contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: 100, flexGrow: 1 }}
+          style={{ flex: 1, backgroundColor: '#f5f5f5' }}
           keyboardShouldPersistTaps="handled"
           ListEmptyComponent={
-            <View style={{ alignItems: 'center', justifyContent: 'center', paddingVertical: 40 }}>
-              <Text style={{ color: '#999', fontSize: 16 }}>{i18n.t('noMessages') || 'No messages yet'}</Text>
+            <View style={styles.emptyState}>
+              <Ionicons name="chatbubble-ellipses-outline" size={46} color="#9ca3af" />
+              <Text style={styles.emptyStateText}>{i18n.t('noMessages') || 'No messages yet'}</Text>
+              <Text style={styles.emptyStateSubtext}>{i18n.t('startConversationBelow') || 'Start the conversation below.'}</Text>
             </View>
           }
         />
@@ -275,10 +318,12 @@ export default function PlayerChatScreen() {
           onChangeText={setInput}
           placeholder={i18n.t('typeMessage') || 'Type a message...'}
           placeholderTextColor="#888"
-          editable={!limitReached}
+          editable={!limitReached && !sending}
+          onSubmitEditing={handleSendMessage}
+          blurOnSubmit={true}
         />
-        <TouchableOpacity style={styles.sendBtn} onPress={handleSendMessage} disabled={limitReached || loading || !conversationIdState}>
-          <Text style={styles.sendBtnText}>{i18n.t('send') || 'Send'}</Text>
+        <TouchableOpacity style={[styles.sendBtn, (limitReached || loading || !conversationIdState || sending || !input.trim()) && styles.sendBtnDisabled]} onPress={handleSendMessage} disabled={limitReached || loading || !conversationIdState || sending || !input.trim()}>
+          <Ionicons name="send" size={18} color="#fff" />
         </TouchableOpacity>
       </View>
       {limitReached && (
@@ -292,3 +337,4 @@ export default function PlayerChatScreen() {
     </KeyboardAvoidingView>
   );
 }
+

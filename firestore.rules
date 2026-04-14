@@ -9,9 +9,19 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // Admin allowlist (stored as /admins/{uid})
+    // Admin access: support both the legacy `/admins/{uid}` allowlist and the live `users/{uid}.role == 'admin'` model.
     function isAdmin() {
-      return isAuthed() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+      return isAuthed() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        (
+          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+          (
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'Admin' ||
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'ADMIN'
+          )
+        )
+      );
     }
 
     function userRole() {
@@ -31,8 +41,144 @@ service cloud.firestore {
         && exists(/databases/$(database)/documents/conversations/$(conversationId))
         && (
           get(/databases/$(database)/documents/conversations/$(conversationId)).data.participant1Id == request.auth.uid ||
-          get(/databases/$(database)/documents/conversations/$(conversationId)).data.participant2Id == request.auth.uid
+          get(/databases/$(database)/documents/conversations/$(conversationId)).data.participant2Id == request.auth.uid ||
+          (
+            get(/databases/$(database)/documents/conversations/$(conversationId)).data.keys().hasAny(['participants']) &&
+            get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants is list &&
+            get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants.hasAny([request.auth.uid])
+          ) ||
+          (
+            get(/databases/$(database)/documents/conversations/$(conversationId)).data.keys().hasAny(['participantIds']) &&
+            get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantIds is list &&
+            get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantIds.hasAny([request.auth.uid])
+          ) ||
+          (
+            get(/databases/$(database)/documents/conversations/$(conversationId)).data.keys().hasAny(['members']) &&
+            get(/databases/$(database)/documents/conversations/$(conversationId)).data.members is list &&
+            get(/databases/$(database)/documents/conversations/$(conversationId)).data.members.hasAny([request.auth.uid])
+          )
         );
+    }
+
+    function isBookingCustomer(data) {
+      return isAuthed() && (
+        data.playerId == request.auth.uid ||
+        data.parentId == request.auth.uid ||
+        data.userId == request.auth.uid ||
+        data.academyId == request.auth.uid
+      );
+    }
+
+    function isBookingProvider(data) {
+      return isAuthed() && data.providerId == request.auth.uid;
+    }
+
+    function bookingCoreFieldsUnchanged() {
+      return request.resource.data.playerId == resource.data.playerId &&
+        request.resource.data.parentId == resource.data.parentId &&
+        request.resource.data.userId == resource.data.userId &&
+        request.resource.data.academyId == resource.data.academyId &&
+        request.resource.data.providerId == resource.data.providerId &&
+        request.resource.data.type == resource.data.type &&
+        request.resource.data.createdAt == resource.data.createdAt;
+    }
+
+    function hasValidLocationsField(data) {
+      return !data.keys().hasAny(['locations']) ||
+        (data.locations is list && data.locations.size() <= 20);
+    }
+
+    function bookingProviderExists(data) {
+      return data.providerId is string && (
+        (data.type == 'academy' && exists(/databases/$(database)/documents/academies/$(data.providerId))) ||
+        (data.type == 'clinic' && exists(/databases/$(database)/documents/clinics/$(data.providerId)))
+      );
+    }
+
+    function hasValidBookingCreateData(data) {
+      return data['providerId'] != null
+        && (data['type'] == 'academy' || data['type'] == 'clinic')
+        && data['status'] == 'pending'
+        && bookingProviderExists(data)
+        && (!data.keys().hasAny(['price']) || data['price'] >= 0)
+        && (!data.keys().hasAny(['city']) || data['city'] != null)
+        && (!data.keys().hasAny(['name']) || data['name'] != null)
+        && (!data.keys().hasAny(['service']) || data['service'] != null)
+        && (!data.keys().hasAny(['doctor']) || data['doctor'] != null);
+    }
+
+    function canWriteOwnUserDoc(uid) {
+      return isAuthed()
+        && request.auth.uid == uid
+        && request.resource.data.uid == uid
+        && (
+          request.resource.data.role == 'player' ||
+          request.resource.data.role == 'parent' ||
+          request.resource.data.role == 'academy' ||
+          request.resource.data.role == 'clinic' ||
+          request.resource.data.role == 'agent' ||
+          request.resource.data.role == 'PLAYER' ||
+          request.resource.data.role == 'PARENT' ||
+          request.resource.data.role == 'ACADEMY' ||
+          request.resource.data.role == 'CLINIC' ||
+          request.resource.data.role == 'AGENT'
+        )
+        && hasValidLocationsField(request.resource.data);
+    }
+
+    function canWriteOwnRoleDoc(uid, role) {
+      return isAuthed()
+        && request.auth.uid == uid
+        && request.resource.data.uid == uid
+        && request.resource.data.role == role
+        && hasValidLocationsField(request.resource.data);
+    }
+
+    function canWriteOwnIndexDoc() {
+      return isAuthed()
+        && request.auth.token.email != null
+        && request.resource.data.keys().hasOnly(['authEmail'])
+        && request.resource.data.authEmail == request.auth.token.email;
+    }
+
+    function customerCanUpdateBooking() {
+      return isBookingCustomer(resource.data)
+        && resource.data.status != 'completed'
+        && (
+          // Customer can always cancel any non-completed booking (only status + updatedAt change)
+          (
+            request.resource.data.status == 'cancelled'
+            && request.resource.data.diff(resource.data).changedKeys().hasOnly(['status', 'updatedAt'])
+          ) ||
+          // Customer can accept (confirmed) or decline (cancelled) a time proposed by admin
+          (
+            (resource.data.status == 'new_time_proposed' || resource.data.status == 'timing_proposed') &&
+            resource.data.proposedByAdmin == true &&
+            (request.resource.data.status == 'confirmed' || request.resource.data.status == 'cancelled') &&
+            request.resource.data.diff(resource.data).changedKeys().hasOnly(['status', 'updatedAt'])
+          )
+        );
+    }
+
+    function providerOrAdminCanManageBooking() {
+      return resource.data.status != 'completed' && (
+        (
+          request.resource.data.diff(resource.data).changedKeys().hasOnly(['status', 'checkedInAt', 'lastCheckInId', 'lastCheckInAt', 'checkedInBy', 'attendanceStatus', 'source', 'updatedAt']) &&
+          [
+            'confirmed',
+            'cancelled',
+            'completed',
+            'no_show',
+            'refunded',
+            'failed_payment'
+          ].hasAny([request.resource.data.status])
+        ) ||
+        (
+          request.resource.data.diff(resource.data).changedKeys().hasOnly(['status', 'date', 'time', 'preferredTime', 'proposedByAdmin', 'updatedAt']) &&
+          (request.resource.data.status == 'new_time_proposed' || request.resource.data.status == 'timing_proposed') &&
+          request.resource.data.proposedByAdmin == true
+        )
+      );
     }
 
     // =========================
@@ -51,10 +197,12 @@ service cloud.firestore {
       allow list: if isAuthed();
 
       // Writes: own doc only; admin can write all
-      allow create: if isAuthed() && (request.auth.uid == uid || isAdmin());
-      allow update: if isAuthed() 
-        && (request.auth.uid == uid || isAdmin())
-        && (isAdmin() || request.resource.data.role == resource.data.role); // Role immutable for non-admins
+      allow create: if isAdmin() || canWriteOwnUserDoc(uid);
+      allow update: if isAdmin() || (
+        canWriteOwnUserDoc(uid)
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.uid == resource.data.uid
+      ); // Role + uid immutable for non-admins
       allow delete: if isAdmin();
     }
 
@@ -65,35 +213,65 @@ service cloud.firestore {
     match /players/{uid} {
       allow get, read: if isAuthed();
       allow list: if isAuthed();
-      allow create, update, delete: if isAuthed() && request.auth.uid == uid;
+      allow create: if isAdmin() || canWriteOwnRoleDoc(uid, 'player');
+      allow update: if isAdmin() || (
+        canWriteOwnRoleDoc(uid, 'player')
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.role == resource.data.role
+      );
+      allow delete: if isAuthed() && request.auth.uid == uid;
       allow read, write, list: if isAdmin();
     }
 
     match /parents/{uid} {
       allow get, read: if isAuthed();
       allow list: if isAuthed();
-      allow create, update, delete: if isAuthed() && request.auth.uid == uid;
+      allow create: if isAdmin() || canWriteOwnRoleDoc(uid, 'parent');
+      allow update: if isAdmin() || (
+        canWriteOwnRoleDoc(uid, 'parent')
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.role == resource.data.role
+      );
+      allow delete: if isAuthed() && request.auth.uid == uid;
       allow read, write, list: if isAdmin();
     }
 
     match /academies/{uid} {
       allow get, read: if isAuthed();
       allow list: if isAuthed();
-      allow create, update, delete: if isAuthed() && request.auth.uid == uid;
+      allow create: if isAdmin() || canWriteOwnRoleDoc(uid, 'academy');
+      allow update: if isAdmin() || (
+        canWriteOwnRoleDoc(uid, 'academy')
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.role == resource.data.role
+      );
+      allow delete: if isAuthed() && request.auth.uid == uid;
       allow read, write, list: if isAdmin();
     }
 
     match /clinics/{uid} {
       allow get, read: if isAuthed();
       allow list: if isAuthed();
-      allow create, update, delete: if isAuthed() && request.auth.uid == uid;
+      allow create: if isAdmin() || canWriteOwnRoleDoc(uid, 'clinic');
+      allow update: if isAdmin() || (
+        canWriteOwnRoleDoc(uid, 'clinic')
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.role == resource.data.role
+      );
+      allow delete: if isAuthed() && request.auth.uid == uid;
       allow read, write, list: if isAdmin();
     }
 
     match /agents/{uid} {
       allow get, read: if isAuthed();
       allow list: if isAuthed();
-      allow create, update, delete: if isAuthed() && request.auth.uid == uid;
+      allow create: if isAdmin() || canWriteOwnRoleDoc(uid, 'agent');
+      allow update: if isAdmin() || (
+        canWriteOwnRoleDoc(uid, 'agent')
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.role == resource.data.role
+      );
+      allow delete: if isAuthed() && request.auth.uid == uid;
       allow read, write, list: if isAdmin();
     }
 
@@ -140,36 +318,38 @@ service cloud.firestore {
     // /bookings, /conversations, /messages, /checkins, /notifications, /reports
     // =========================
     match /bookings/{bookingId} {
-      // User involved (as customer or provider) OR admin
+      // Only the booking customer, the provider, or an admin may read a booking.
       allow get, read: if isAuthed() && (
-        resource.data.playerId == request.auth.uid ||
-        resource.data.parentId == request.auth.uid ||
-        resource.data.userId == request.auth.uid ||
-        resource.data.academyId == request.auth.uid ||
-        resource.data.providerId == request.auth.uid ||
+        isBookingCustomer(resource.data) ||
+        isBookingProvider(resource.data) ||
         isAdmin()
       );
 
-      // Queries are allowed for authed users; per-doc read still enforced above.
-      allow list: if isAuthed();
+      // Create: requester must be booking for themselves and all customer identity fields,
+      // if provided, must also point back to the signed-in user.
+      allow create: if isAuthed()
+        && request.resource.data.keys().hasAll(['providerId', 'type', 'status', 'createdAt'])
+        && hasValidBookingCreateData(request.resource.data)
+        && (!request.resource.data.keys().hasAny(['playerId']) || request.resource.data.playerId == request.auth.uid)
+        && (!request.resource.data.keys().hasAny(['parentId']) || request.resource.data.parentId == request.auth.uid)
+        && (!request.resource.data.keys().hasAny(['userId']) || request.resource.data.userId == request.auth.uid)
+        && (!request.resource.data.keys().hasAny(['academyId']) || request.resource.data.academyId == request.auth.uid)
+        && (
+          request.resource.data.playerId == request.auth.uid ||
+          request.resource.data.parentId == request.auth.uid ||
+          request.resource.data.userId == request.auth.uid ||
+          request.resource.data.academyId == request.auth.uid ||
+          isAdmin()
+        );
 
-      // Create: requester must be the customer (player, parent, userId, or academy)
-      allow create: if isAuthed() && (
-        request.resource.data.playerId == request.auth.uid ||
-        request.resource.data.parentId == request.auth.uid ||
-        request.resource.data.userId == request.auth.uid ||
-        request.resource.data.academyId == request.auth.uid ||
-        isAdmin()
-      );
+      // Customers can only cancel or respond to a proposed time.
+      // Providers have constrained status transitions.
+      // Admin has full update override for operational support and moderation.
+      allow update: if isAdmin()
+        || (isBookingProvider(resource.data) && providerOrAdminCanManageBooking())
+        || customerCanUpdateBooking();
 
-      allow update, delete: if isAuthed() && (
-        resource.data.playerId == request.auth.uid ||
-        resource.data.parentId == request.auth.uid ||
-        resource.data.userId == request.auth.uid ||
-        resource.data.academyId == request.auth.uid ||
-        resource.data.providerId == request.auth.uid ||
-        isAdmin()
-      );
+      allow delete: if isAdmin();
     }
 
     match /conversations/{conversationId} {
@@ -183,8 +363,7 @@ service cloud.firestore {
         isAdmin()
       );
 
-      // Needed for `subscribeToConversations()` queries
-      allow list: if isAuthed();
+      // No blanket list access; queries must resolve only to conversations the caller participates in.
 
       allow create: if isAuthed() && (
         request.resource.data.participant1Id == request.auth.uid ||
@@ -206,11 +385,20 @@ service cloud.firestore {
           && request.resource.data.senderId == request.auth.uid
           && (isConversationParticipant(conversationId) || isAdmin());
 
-        // Allow participants to update messages (e.g., mark isRead) and sender to edit their own message.
-        // (Keeps existing app behavior; can be tightened further once schema is stabilized.)
-        allow update, delete: if isAuthed() && (
-          isConversationParticipant(conversationId) ||
-          isAdmin()
+        // Participants can only mark messages as read. Only admins can do broader edits,
+        // and only the original sender can delete their own message.
+        allow update: if isAdmin() || (
+          isAuthed()
+          && isConversationParticipant(conversationId)
+          && request.resource.data.senderId == resource.data.senderId
+          && request.resource.data.content == resource.data.content
+          && request.resource.data.mediaUrl == resource.data.mediaUrl
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.isRead == true
+        );
+
+        allow delete: if isAdmin() || (
+          isAuthed() && resource.data.senderId == request.auth.uid
         );
       }
     }
@@ -222,13 +410,15 @@ service cloud.firestore {
         resource.data.playerId == request.auth.uid ||
         resource.data.createdBy == request.auth.uid
       );
-      allow list: if isAuthed();
 
-      // Create: only academy/clinic, must start as 'pending'
+      // Academy/clinic scanners need list access to query recent check-ins for cooldown logic
+      allow list: if isAuthed() && (isAdmin() || hasRole('academy') || hasRole('clinic'));
+
+      // Create: only academy/clinic, may be written as pending or completed depending on the scan flow
       allow create: if isAuthed()
         && (hasRole('academy') || hasRole('clinic'))
         && request.resource.data.createdBy == request.auth.uid
-        && request.resource.data.status == 'pending'
+        && ['pending', 'completed'].hasAny([request.resource.data.status])
         && request.resource.data.keys().hasAll(['userId', 'createdBy', 'status', 'createdAt']);
 
       // Update: ONLY admin can change status or other fields
@@ -265,8 +455,7 @@ service cloud.firestore {
         isAdmin()
       );
 
-      // Needed for `subscribeMyNotifications()` query
-      allow list: if isAuthed();
+      // No blanket list access; notification queries must resolve only to the signed-in user or admin.
 
       // App currently creates notifications client-side (provider/admin notifications too).
       // Minimal guard: require `createdBy == auth.uid`.
@@ -326,6 +515,50 @@ service cloud.firestore {
       allow create, update, delete: if isAdmin();
     }
 
+    match /transactions/{transactionId} {
+      allow get, read, list, create, update, delete: if isAdmin();
+
+      // Academy/clinic scanners create and update monetization transactions for their location
+      allow get: if isAuthed() && (hasRole('academy') || hasRole('clinic'))
+        && resource.data.providerId == request.auth.uid;
+
+      // list needed for abuse-key duplicate check (where abuseKey == ...)
+      allow list: if isAuthed() && (hasRole('academy') || hasRole('clinic'));
+
+      allow create: if isAuthed() && (hasRole('academy') || hasRole('clinic'))
+        && request.resource.data.providerId == request.auth.uid;
+
+      allow update: if isAuthed() && (hasRole('academy') || hasRole('clinic'))
+        && resource.data.providerId == request.auth.uid;
+    }
+
+    match /payouts/{payoutId} {
+      allow get, read: if isAdmin() || (
+        isAuthed() && resource.data.providerId == request.auth.uid && resource.data.recordType == 'summary'
+      );
+      allow delete: if isAdmin();
+
+      // Admin full control
+      allow list, create, update: if isAdmin();
+
+      // Academy/clinic can list and upsert their own payout summary (refreshed after scan-triggered monetization)
+      allow list: if isAuthed() && (hasRole('academy') || hasRole('clinic'));
+
+      allow create: if isAuthed() && (hasRole('academy') || hasRole('clinic'))
+        && request.resource.data.providerId == request.auth.uid;
+
+      allow update: if isAuthed() && (hasRole('academy') || hasRole('clinic'))
+        && resource.data.providerId == request.auth.uid;
+    }
+
+    match /admin_logs/{logId} {
+      allow get, read, list, create, update, delete: if isAdmin();
+    }
+
+    match /admin_notes/{noteId} {
+      allow get, read, list, create, update, delete: if isAdmin();
+    }
+
     // =========================
     // 8) /emailIndex, /phoneIndex - Login lookup (public read for sign-in)
     // Maps email/phone to Firebase Auth identity so sign-in can resolve before auth.
@@ -333,14 +566,20 @@ service cloud.firestore {
     match /emailIndex/{docId} {
       allow get, read: if true;
       allow list: if false;
-      allow create: if isAuthed();
-      allow update, delete: if isAdmin();
+      allow create: if canWriteOwnIndexDoc();
+      allow update: if isAdmin() || (
+        canWriteOwnIndexDoc() && resource.data.authEmail == request.auth.token.email
+      );
+      allow delete: if isAdmin();
     }
     match /phoneIndex/{docId} {
       allow get, read: if true;
       allow list: if false;
-      allow create: if isAuthed();
-      allow update, delete: if isAdmin();
+      allow create: if canWriteOwnIndexDoc();
+      allow update: if isAdmin() || (
+        canWriteOwnIndexDoc() && resource.data.authEmail == request.auth.token.email
+      );
+      allow delete: if isAdmin();
     }
 
     // =========================

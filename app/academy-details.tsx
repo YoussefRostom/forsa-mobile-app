@@ -1,9 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Image, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, findNodeHandle, Image, Linking, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { doc, getDoc, collection, addDoc, query, where, getDocs } from 'firebase/firestore';
 import { notifyProviderAndAdmins, createNotification } from '../services/NotificationService';
+import { upsertBookingTransaction } from '../services/MonetizationService';
 import { db, auth } from '../lib/firebase';
 import i18n from '../locales/i18n';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -12,12 +13,30 @@ type Academy = {
   id: string;
   name: string;
   city: string;
+  district?: string;
   description: string;
   fees: Record<string, number>;
   schedule?: Record<string, { day: string; time: string }>;
   images?: any[];
   address?: string;
   phone?: string;
+  email?: string;
+  instagramUrl?: string;
+  facebookUrl?: string;
+  socialUrl?: string;
+  mapUrl?: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  coordinates?: { latitude?: number | null; longitude?: number | null } | null;
+  locations?: Array<{
+    label?: string;
+    city?: string;
+    district?: string;
+    address?: string;
+    mapUrl?: string | null;
+    latitude?: number | null;
+    longitude?: number | null;
+  }>;
   profilePhoto?: string;
 };
 
@@ -48,6 +67,119 @@ export default function AcademyDetailsScreen() {
   const [selectedAge, setSelectedAge] = useState<string>('');
   const [ageModalVisible, setAgeModalVisible] = useState(false);
   const [bookingLoading, setBookingLoading] = useState(false);
+  const [privateBookingLoadingId, setPrivateBookingLoadingId] = useState<string | null>(null);
+  const scrollViewRef = useRef<ScrollView | null>(null);
+  const postsSectionRef = useRef<View | null>(null);
+  const cityLabels = i18n.t('cities', { returnObjects: true }) as Record<string, string>;
+
+  const openExternalLink = async (url: string) => {
+    if (!url) return;
+    const isAbsoluteUrl = /^(https?:\/\/|geo:|maps:|comgooglemaps:\/\/)/i.test(url);
+    const fullUrl = isAbsoluteUrl ? url : `https://${url}`;
+    const canOpen = await Linking.canOpenURL(fullUrl);
+    if (canOpen) {
+      await Linking.openURL(fullUrl);
+    } else {
+      Alert.alert(i18n.t('error') || 'Error', i18n.t('invalidUrl') || 'Cannot open this link.');
+    }
+  };
+
+  const getAcademyCoordinates = (target: Academy | null) => {
+    const latitude = target?.coordinates?.latitude ?? target?.latitude;
+    const longitude = target?.coordinates?.longitude ?? target?.longitude;
+    return {
+      latitude: typeof latitude === 'number' && Number.isFinite(latitude) ? latitude : null,
+      longitude: typeof longitude === 'number' && Number.isFinite(longitude) ? longitude : null,
+    };
+  };
+
+  const buildMapQuery = (target: Academy | null) => {
+    return [target?.name, target?.address, target?.district, target?.city]
+      .filter(Boolean)
+      .join(', ');
+  };
+
+  const getCityLabel = (city?: string) => {
+    if (!city) return '';
+    return cityLabels?.[city] || city;
+  };
+
+  const buildLocationTarget = (location?: Academy['locations'] extends Array<infer T> ? T : never): Academy | null => {
+    if (!academy) return null;
+
+    const latitude = location?.latitude;
+    const longitude = location?.longitude;
+
+    return {
+      ...academy,
+      city: location?.city || academy.city,
+      district: location?.district || academy.district,
+      address: location?.address || academy.address,
+      mapUrl: location?.mapUrl || academy.mapUrl,
+      latitude: typeof latitude === 'number' && Number.isFinite(latitude) ? latitude : academy.latitude ?? null,
+      longitude: typeof longitude === 'number' && Number.isFinite(longitude) ? longitude : academy.longitude ?? null,
+      coordinates:
+        typeof latitude === 'number' && Number.isFinite(latitude) && typeof longitude === 'number' && Number.isFinite(longitude)
+          ? { latitude, longitude }
+          : academy.coordinates || null,
+    };
+  };
+
+  const buildMapsUrl = (target: Academy | null, directions = false) => {
+    if (!target) return '';
+    if (target.mapUrl) return target.mapUrl;
+
+    const { latitude, longitude } = getAcademyCoordinates(target);
+    if (latitude !== null && longitude !== null) {
+      return directions
+        ? `https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}`
+        : `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
+    }
+
+    const query = buildMapQuery(target);
+    if (!query) return '';
+
+    return directions
+      ? `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(query)}`
+      : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+  };
+
+  const handleViewOnMap = (target: Academy | null = academy) => {
+    if (!target) return;
+
+    const { latitude, longitude } = getAcademyCoordinates(target);
+    const hasCoordinates = latitude !== null && longitude !== null;
+    const query = buildMapQuery(target);
+
+    if (!hasCoordinates && !query && !target.mapUrl) {
+      Alert.alert(i18n.t('error') || 'Error', i18n.t('mapNotAvailable') || 'Map location is not available yet.');
+      return;
+    }
+
+    const params: Record<string, string> = {
+      title: target.name || '',
+      address: target.address || '',
+      city: target.city || '',
+      district: target.district || '',
+      mapUrl: target.mapUrl || '',
+    };
+
+    if (hasCoordinates) {
+      params.latitude = String(latitude);
+      params.longitude = String(longitude);
+    }
+
+    router.push({ pathname: '/academy-map-view', params });
+  };
+
+  const handleOpenInMaps = async (target: Academy | null = academy) => {
+    const url = buildMapsUrl(target, true);
+    if (!url) {
+      Alert.alert(i18n.t('error') || 'Error', i18n.t('mapNotAvailable') || 'Map location is not available yet.');
+      return;
+    }
+    await openExternalLink(url);
+  };
 
   useEffect(() => {
     let parsed: Academy | null = null;
@@ -71,11 +203,19 @@ export default function AcademyDetailsScreen() {
             id: academyDoc.id,
             name: data.academyName || '',
             city: data.city || '',
+            district: data.district || '',
             description: data.description || '',
             fees: data.fees || {},
             schedule: data.schedule || {},
             address: data.address || '',
             phone: data.phone || '',
+            email: data.email || null,
+            socialUrl: data.socialUrl || data.instagramUrl || data.facebookUrl || null,
+            mapUrl: data.mapUrl || null,
+            latitude: data.latitude ?? data.coordinates?.latitude ?? null,
+            longitude: data.longitude ?? data.coordinates?.longitude ?? null,
+            coordinates: data.coordinates || null,
+            locations: data.locations || [],
             images: data.images || [],
             profilePhoto: data.profilePhoto || '',
           });
@@ -197,6 +337,7 @@ export default function AcademyDetailsScreen() {
       };
 
       const bookingRef = await addDoc(collection(db, 'bookings'), bookingData);
+      await upsertBookingTransaction(bookingRef.id, bookingData, user.uid, 'Academy booking created');
       const providerId = academy.id;
       try {
         await notifyProviderAndAdmins(
@@ -239,7 +380,7 @@ export default function AcademyDetailsScreen() {
     }
 
     try {
-      setBookingLoading(true);
+      setPrivateBookingLoadingId(program.id);
 
       // Fetch user name from Firestore
       let playerName = user.displayName || 'Player';
@@ -274,6 +415,7 @@ export default function AcademyDetailsScreen() {
       };
 
       const bookingRef = await addDoc(collection(db, 'bookings'), bookingData);
+      await upsertBookingTransaction(bookingRef.id, bookingData, user.uid, 'Private training booking created');
       const providerId = academy!.id;
       try {
         await notifyProviderAndAdmins(
@@ -304,7 +446,7 @@ export default function AcademyDetailsScreen() {
       console.error('Private training booking error:', error);
       Alert.alert(i18n.t('error'), i18n.t('bookingFailed') || 'Failed to send booking request. Please try again.');
     } finally {
-      setBookingLoading(false);
+      setPrivateBookingLoadingId(null);
     }
   };
 
@@ -315,6 +457,7 @@ export default function AcademyDetailsScreen() {
         style={styles.gradient}
       >
         <ScrollView
+          ref={scrollViewRef}
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
         >
@@ -335,7 +478,15 @@ export default function AcademyDetailsScreen() {
             <Text style={styles.academyName}>{academy.name}</Text>
             <View style={styles.locationRow}>
               <Ionicons name="location" size={16} color="rgba(255,255,255,0.7)" />
-              <Text style={styles.locationText}>{academy.city}</Text>
+              <Text style={styles.locationText}>{[academy.district, getCityLabel(academy.city)].filter(Boolean).join(', ') || getCityLabel(academy.city)}</Text>
+            </View>
+            <View style={styles.headerBadgesRow}>
+              <View style={styles.headerBadge}>
+                <Ionicons name="business-outline" size={14} color="#fff" />
+                <Text style={styles.headerBadgeText}>
+                  {Array.isArray(academy.locations) && academy.locations.length > 1 ? `${academy.locations.length} branches` : 'Main branch'}
+                </Text>
+              </View>
             </View>
             {academy.phone && (
               <TouchableOpacity
@@ -361,15 +512,75 @@ export default function AcademyDetailsScreen() {
             )}
 
             {/* Address Section */}
-            {academy.address && (
+            {(academy.address || academy.mapUrl || academy.latitude != null || academy.coordinates) && (
               <View style={styles.section}>
                 <View style={styles.sectionHeader}>
                   <Ionicons name="map-outline" size={20} color="#000" />
                   <Text style={styles.sectionTitle}>{i18n.t('address') || 'Address'}</Text>
                 </View>
-                <Text style={styles.addressText}>{academy.address}</Text>
+                <Text style={styles.addressText}>
+                  {academy.address || [academy.district, academy.city].filter(Boolean).join(', ') || (i18n.t('locationUnavailable') || 'Location unavailable')}
+                </Text>
+
+                {!(Array.isArray(academy.locations) && academy.locations.length > 1) ? (
+                  <View style={styles.mapActionsRow}>
+                    <TouchableOpacity style={styles.mapActionButton} onPress={handleViewOnMap}>
+                      <Ionicons name="map-outline" size={18} color="#000" />
+                      <Text style={styles.mapActionButtonText}>{i18n.t('viewOnMap') || 'View on map'}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[styles.mapActionButton, styles.mapActionButtonPrimary]} onPress={handleOpenInMaps}>
+                      <Ionicons name="navigate-outline" size={18} color="#fff" />
+                      <Text style={styles.mapActionButtonPrimaryText}>{i18n.t('openInMaps') || 'Open in Maps'}</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
+
+                {Array.isArray(academy.locations) && academy.locations.length > 1 ? (
+                  <View style={styles.locationsList}>
+                    {academy.locations.map((location, index) => {
+                      const branchTarget = buildLocationTarget(location);
+                      return (
+                        <View key={`${location.label || 'location'}-${index}`} style={styles.locationItemCard}>
+                          <View style={styles.locationItemTopRow}>
+                            <Text style={styles.locationItemTitle}>
+                              {location.label || `${i18n.t('locationLabel') || 'Location'} ${index + 1}`}
+                            </Text>
+                            {index === 0 ? (
+                              <View style={styles.primaryBranchBadge}>
+                                <Text style={styles.primaryBranchBadgeText}>{i18n.t('mainLocationLabel') || 'Main location'}</Text>
+                              </View>
+                            ) : null}
+                          </View>
+                          <Text style={styles.locationItemText}>
+                            {[location.address, location.district, getCityLabel(location.city)].filter(Boolean).join(', ')}
+                          </Text>
+                          <View style={styles.locationCardActions}>
+                            <TouchableOpacity style={styles.locationCardActionButton} onPress={() => handleViewOnMap(branchTarget)}>
+                              <Ionicons name="map-outline" size={16} color="#000" />
+                              <Text style={styles.locationCardActionText}>{i18n.t('viewOnMap') || 'View on map'}</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity style={[styles.locationCardActionButton, styles.locationCardActionPrimary]} onPress={() => handleOpenInMaps(branchTarget)}>
+                              <Ionicons name="navigate-outline" size={16} color="#fff" />
+                              <Text style={styles.locationCardActionPrimaryText}>{i18n.t('openInMaps') || 'Open in Maps'}</Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </View>
+                ) : null}
               </View>
             )}
+
+            {academy.socialUrl ? (
+              <TouchableOpacity style={styles.section} onPress={() => openExternalLink(academy.socialUrl)}>
+                <View style={styles.sectionHeader}>
+                  <Ionicons name="link-outline" size={20} color="#000" />
+                  <Text style={styles.sectionTitle}>{i18n.t('social_url') || 'Website / Social URL'}</Text>
+                </View>
+                <Text style={styles.addressText}>{academy.socialUrl}</Text>
+              </TouchableOpacity>
+            ) : null}
 
             {/* Gallery Section */}
             {images && images.length > 0 && (
@@ -427,7 +638,7 @@ export default function AcademyDetailsScreen() {
 
             {/* Posts Section */}
             {posts.length > 0 && (
-              <View style={styles.section}>
+              <View ref={postsSectionRef} style={styles.section}>
                 <Text style={styles.sectionTitle}>{i18n.t('posts') || 'Latest Posts'}</Text>
                 {posts.map((post, idx) => (
                   <View key={idx} style={styles.postCard}>
@@ -452,14 +663,22 @@ export default function AcademyDetailsScreen() {
                   {programs.filter(p => p.type === 'private_training').map((program) => (
                     <View key={program.id} style={styles.programCard}>
                       <View style={styles.programHeader}>
-                        <Text style={styles.programName}>{program.name}</Text>
+                        <Text style={styles.programName}>
+                          {program.type === 'private_training' && (!program.name || program.name === 'Private Training')
+                            ? (i18n.t('privateTraining') || 'Private Training')
+                            : program.name}
+                        </Text>
                         <Text style={styles.programPrice}>{program.fee} EGP</Text>
                       </View>
                       {program.coachName && (
-                        <Text style={styles.programCoach}>Coach: {program.coachName}</Text>
+                        <Text style={styles.programCoach}>{i18n.t('coach') || 'Coach'}: {program.coachName}</Text>
                       )}
                       {program.description && (
-                        <Text style={styles.programDescription}>{program.description}</Text>
+                        <Text style={styles.programDescription}>
+                          {typeof program.description === 'string' && program.coachName && program.description.toLowerCase().startsWith('private training sessions with')
+                            ? (i18n.t('privateTrainingWithCoach', { coachName: program.coachName }) || program.description)
+                            : program.description}
+                        </Text>
                       )}
                       {program.specializations && program.specializations.length > 0 && (
                         <View style={styles.specializationsContainer}>
@@ -469,18 +688,23 @@ export default function AcademyDetailsScreen() {
                       )}
                       <View style={styles.programDetails}>
                         <Text style={styles.programDetail}>
-                          <Ionicons name="time-outline" size={14} color="#666" /> {program.duration} min
+                          <Ionicons name="time-outline" size={14} color="#666" /> {program.duration} {i18n.t('minutesShort') || 'min'}
                         </Text>
                         <Text style={styles.programDetail}>
-                          <Ionicons name="people-outline" size={14} color="#666" /> Max {program.maxParticipants}
+                          <Ionicons name="people-outline" size={14} color="#666" /> {i18n.t('maxParticipants') || 'Max'} {program.maxParticipants}
                         </Text>
                       </View>
                       <TouchableOpacity
-                        style={styles.bookProgramButton}
+                        style={[styles.bookProgramButton, (bookingLoading || privateBookingLoadingId === program.id) && styles.bookProgramButtonDisabled]}
                         onPress={() => handleBookPrivateTraining(program)}
                         activeOpacity={0.8}
+                        disabled={bookingLoading || privateBookingLoadingId === program.id}
                       >
-                        <Text style={styles.bookProgramButtonText}>{i18n.t('bookNow') || 'Book Now'}</Text>
+                        {privateBookingLoadingId === program.id ? (
+                          <ActivityIndicator color="#fff" />
+                        ) : (
+                          <Text style={styles.bookProgramButtonText}>{i18n.t('bookNow') || 'Book Now'}</Text>
+                        )}
                       </TouchableOpacity>
                     </View>
                   ))}
@@ -538,6 +762,20 @@ export default function AcademyDetailsScreen() {
                       )}
                     </View>
                   )}
+
+                  {selectedAge ? (
+                    <View style={styles.bookingSummaryCard}>
+                      <Text style={styles.bookingSummaryTitle}>{i18n.t('reviewBooking') || 'Review Before Sending'}</Text>
+                      <Text style={styles.bookingSummaryText}>{academy.name}</Text>
+                      <Text style={styles.bookingSummaryText}>{i18n.t('ageGroup') || 'Age Group'}: {selectedAge} {i18n.t('years') || 'years'}</Text>
+                      <Text style={styles.bookingSummaryText}>{i18n.t('price') || 'Price'}: {selectedPrice} EGP</Text>
+                      {academy.schedule?.[selectedAge]?.day ? <Text style={styles.bookingSummaryText}>{i18n.t('day') || 'Day'}: {i18n.t(academy.schedule[selectedAge].day) || academy.schedule[selectedAge].day}</Text> : null}
+                      {academy.schedule?.[selectedAge]?.time ? <Text style={styles.bookingSummaryText}>{i18n.t('time') || 'Time'}: {formatTimeForDisplay(academy.schedule[selectedAge].time)}</Text> : null}
+                    </View>
+                  ) : (
+                    <Text style={styles.bookingHintText}>{i18n.t('selectAgeToReview') || 'Select an age group to review the booking before sending.'}</Text>
+                  )}
+
                   <TouchableOpacity
                     style={[styles.reserveButton, (!selectedAge || bookingLoading) && styles.reserveButtonDisabled]}
                     onPress={handleReserve}
@@ -705,12 +943,32 @@ const styles = StyleSheet.create({
   locationRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 10,
   },
   locationText: {
     fontSize: 16,
     color: 'rgba(255, 255, 255, 0.7)',
     marginLeft: 6,
+  },
+  headerBadgesRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 18,
+  },
+  headerBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+  },
+  headerBadgeText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
   },
   contactButton: {
     flexDirection: 'row',
@@ -759,6 +1017,102 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#333',
     lineHeight: 22,
+  },
+  mapActionsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginTop: 16,
+  },
+  mapActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#f3f4f6',
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+  },
+  mapActionButtonPrimary: {
+    backgroundColor: '#000',
+  },
+  mapActionButtonText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#000',
+  },
+  mapActionButtonPrimaryText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  locationsList: {
+    gap: 8,
+    marginTop: 12,
+  },
+  locationItemCard: {
+    backgroundColor: '#f9fafb',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  locationItemTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 4,
+  },
+  locationItemText: {
+    fontSize: 13,
+    color: '#4b5563',
+    lineHeight: 18,
+  },
+  locationItemTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginBottom: 6,
+  },
+  primaryBranchBadge: {
+    backgroundColor: '#111827',
+    borderRadius: 999,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+  },
+  primaryBranchBadgeText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  locationCardActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 10,
+  },
+  locationCardActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#eef2f7',
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+  },
+  locationCardActionPrimary: {
+    backgroundColor: '#000',
+  },
+  locationCardActionText: {
+    color: '#000',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  locationCardActionPrimaryText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
   },
   gallery: {
     marginTop: 8,
@@ -1070,6 +1424,31 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
     color: '#000',
+  },
+  bookingSummaryCard: {
+    marginTop: 16,
+    padding: 14,
+    borderRadius: 12,
+    backgroundColor: '#f9fafb',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  bookingSummaryTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#000',
+    marginBottom: 8,
+  },
+  bookingSummaryText: {
+    fontSize: 14,
+    color: '#374151',
+    marginBottom: 4,
+  },
+  bookingHintText: {
+    marginTop: 14,
+    color: '#666',
+    fontSize: 13,
+    lineHeight: 18,
   },
   selectedScheduleText: {
     fontSize: 15,

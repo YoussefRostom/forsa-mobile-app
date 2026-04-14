@@ -18,7 +18,6 @@ const ClinicHamburgerMenu: React.FC<ClinicHamburgerMenuProps> = ({ visible, onCl
     },
     { label: i18n.t('clinicFeed') || 'Clinic Feed', route: '/clinic-feed' },
     { label: i18n.t('editServices') || 'Edit Services', route: '/clinic-edit-services' },
-    { label: i18n.t('editTimetable') || 'Edit Timetable', route: '/clinic-edit-timetable' },
     { label: i18n.t('signOut') || 'Sign Out', route: '/signout' },
   ];
   return (

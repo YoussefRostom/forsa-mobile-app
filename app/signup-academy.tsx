@@ -27,6 +27,7 @@ const SignupAcademy = () => {
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [city, setCity] = useState('');
+  const [district, setDistrict] = useState('');
   const [address, setAddress] = useState('');
   const [description, setDescription] = useState('');
   const [loading, setLoading] = useState(false);
@@ -52,6 +53,13 @@ const SignupAcademy = () => {
   const removeTraining = (index: number) => {
     setPrivateTrainings(prev => prev.filter((_, i) => i !== index));
   };
+
+  const districts = [
+    'Maadi', 'New Cairo', 'Nasr City', 'Heliopolis', 'Sheikh Zayed',
+    '6 October', 'Mokattam', 'Rehab', 'Madinaty', 'Shorouk',
+    'Roushdy', 'Smouha', 'Sporting', 'Kafr Abdo', 'Gleem',
+    'Sidi Bishr', 'Miami', 'Mandara', 'Agami', 'Montaza'
+  ];
 
   const ageGroups: string[] = Array.from({ length: 10 }, (_, i) => (7 + i).toString());
   const renderAgeRows = (): string[][] => {
@@ -79,9 +87,12 @@ const SignupAcademy = () => {
       setError(i18n.t('fillAllRequiredFields'));
       return;
     }
-    // Check that at least one fee is entered
-    if (!Object.values(fees).some((v) => v && v.trim() !== '')) {
-      setError(i18n.t('enterAtLeastOneFee'));
+    const hasFee = Object.values(fees).some((v) => v && v.trim() !== '');
+    const hasPrivateTrainingEntry = privateTrainings.some((training) =>
+      training.coachName.trim() !== '' && training.privateTrainingPrice.trim() !== ''
+    );
+    if (!hasFee && !hasPrivateTrainingEntry) {
+      setError(i18n.t('enterAtLeastOneFeeOrPrivateTrainer') || 'Enter at least one age price or add a private trainer');
       return;
     }
     setLoading(true);
@@ -98,6 +109,7 @@ const SignupAcademy = () => {
         phone,
         password,
         city,
+        district,
         address,
         description,
         fees: JSON.stringify(fees),
@@ -181,6 +193,25 @@ const SignupAcademy = () => {
                   <Picker.Item label={i18n.t('selectCity')} value="" color="#888" />
                   {Object.entries(i18n.t('cities', { returnObjects: true }) as Record<string, string>).map(([key, label]) => (
                     <Picker.Item key={key} label={label} value={key} color="#111" />
+                  ))}
+                </Picker>
+              </View>
+            </View>
+          </View>
+          <View style={styles.formGroup}>
+            <Text style={styles.label}>{i18n.t('district') || 'District'}</Text>
+            <View style={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginBottom: 0 }}>
+              <View style={{ flex: 1, marginHorizontal: 4, backgroundColor: '#fff', borderWidth: 1, borderColor: '#111', borderRadius: 8, minWidth: 140, maxWidth: 220 }}>
+                <Picker
+                  selectedValue={district}
+                  onValueChange={setDistrict}
+                  style={{ color: '#111', backgroundColor: '#fff', width: '100%' }}
+                  itemStyle={{ color: '#111', textAlign: 'center' }}
+                  mode="dropdown"
+                >
+                  <Picker.Item label={i18n.t('selectDistrict') || 'Select District'} value="" color="#888" />
+                  {districts.map((name) => (
+                    <Picker.Item key={name} label={name} value={name} color="#111" />
                   ))}
                 </Picker>
               </View>

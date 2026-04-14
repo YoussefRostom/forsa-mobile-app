@@ -1,0 +1,504 @@
+import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
+import React, { useEffect, useState } from 'react';
+import { Alert, ActivityIndicator, Image, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Video, ResizeMode } from 'expo-av';
+import { useRouter } from 'expo-router';
+import { collection, query, where, onSnapshot, getDocs } from 'firebase/firestore';
+import { auth, db } from '../lib/firebase';
+import i18n from '../locales/i18n';
+import HamburgerMenu from '../components/HamburgerMenu';
+import { useHamburgerMenu } from '../components/HamburgerMenuContext';
+import { updateMediaCaption, deleteAdminMedia, type MediaDoc } from '../services/MediaService';
+
+const CAPTION_LIMIT = 160;
+
+const formatMediaDate = (createdAt: any) => {
+  const timestamp = createdAt?.toDate
+    ? createdAt.toDate()
+    : createdAt?.seconds
+      ? new Date(createdAt.seconds * 1000)
+      : null;
+
+  if (!timestamp) return '—';
+
+  const diffMs = Date.now() - timestamp.getTime();
+  const diffMinutes = Math.floor(diffMs / 60000);
+
+  if (diffMinutes < 1) return i18n.t('justNow') || 'Just now';
+  if (diffMinutes < 60) return `${diffMinutes}m`;
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) return `${diffHours}h`;
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays < 7) return `${diffDays}d`;
+  return timestamp.toLocaleDateString();
+};
+
+export default function AgentMyMediaScreen() {
+  const router = useRouter();
+  const { openMenu } = useHamburgerMenu();
+  const [mediaList, setMediaList] = useState<(MediaDoc & { postId: string | null; content: string })[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editingMedia, setEditingMedia] = useState<{ id: string; content: string; postId: string | null } | null>(null);
+  const [editCaption, setEditCaption] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [fullScreenMedia, setFullScreenMedia] = useState<{ uri: string; type: 'image' | 'video' } | null>(null);
+
+  const imageCount = mediaList.filter((m) => m.resourceType === 'image').length;
+  const videoCount = mediaList.filter((m) => m.resourceType === 'video').length;
+  const unchangedCaption = editingMedia ? editCaption.trim() === (editingMedia.content || '').trim() : false;
+
+  useEffect(() => {
+    const user = auth.currentUser;
+    if (!user) { setLoading(false); return; }
+
+    const mediaRef = collection(db, 'media');
+    const q = query(mediaRef, where('ownerId', '==', user.uid));
+
+    const unsubscribe = onSnapshot(q, async (snapshot) => {
+      const media: (MediaDoc & { postId: string | null; content: string })[] = [];
+      snapshot.forEach((doc) => {
+        media.push({ id: doc.id, ...doc.data() } as MediaDoc & { postId: string | null; content: string });
+      });
+
+      media.sort((a, b) => {
+        const aTime = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : (a.createdAt?.seconds ? a.createdAt.seconds * 1000 : 0);
+        const bTime = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : (b.createdAt?.seconds ? b.createdAt.seconds * 1000 : 0);
+        return bTime - aTime;
+      });
+
+      const postsRef = collection(db, 'posts');
+      const postsWithMedia = await Promise.all(
+        media.map(async (m) => {
+          const postQuery = query(postsRef, where('mediaId', '==', m.id), where('ownerId', '==', user.uid));
+          const postSnap = await getDocs(postQuery);
+          const post = postSnap.docs[0];
+          return { ...m, postId: post?.id || null, content: post?.data()?.content || '' };
+        })
+      );
+
+      setMediaList(postsWithMedia);
+      setLoading(false);
+    }, () => setLoading(false));
+
+    return () => unsubscribe();
+  }, []);
+
+  const handleEdit = (media: any) => {
+    setEditingMedia({ id: media.id, content: media.content || '', postId: media.postId });
+    setEditCaption(media.content || '');
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingMedia) return;
+    const nextCaption = editCaption.trim();
+    if (nextCaption === (editingMedia.content || '').trim()) { setEditingMedia(null); setEditCaption(''); return; }
+    setSaving(true);
+    try {
+      await updateMediaCaption(editingMedia.id, editingMedia.postId, nextCaption);
+      setEditingMedia(null);
+      setEditCaption('');
+      Alert.alert(i18n.t('success') || 'Success', i18n.t('captionUpdated') || 'Caption updated successfully');
+    } catch (error: any) {
+      Alert.alert(i18n.t('error') || 'Error', error.message || 'Failed to update caption');
+    } finally { setSaving(false); }
+  };
+
+  const handleDelete = (media: any) => {
+    Alert.alert(
+      i18n.t('deleteMedia') || 'Delete post',
+      i18n.t('deleteMediaConfirm') || 'Are you sure you want to delete this post? This cannot be undone.',
+      [
+        { text: i18n.t('cancel') || 'Cancel', style: 'cancel' },
+        {
+          text: i18n.t('delete') || 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            setDeleting(media.id);
+            try {
+              await deleteAdminMedia(media.id, media.postId);
+              Alert.alert(i18n.t('success') || 'Success', i18n.t('mediaDeleted') || 'Post deleted successfully');
+            } catch (error: any) {
+              Alert.alert(i18n.t('error') || 'Error', error.message || 'Failed to delete');
+            } finally { setDeleting(null); }
+          },
+        },
+      ]
+    );
+  };
+
+  if (loading) {
+    return (
+      <LinearGradient colors={['#000000', '#1a1a1a', '#2d2d2d']} style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#fff" />
+        <Text style={styles.loadingText}>{i18n.t('loading') || 'Loading...'}</Text>
+      </LinearGradient>
+    );
+  }
+
+  return (
+    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <LinearGradient colors={['#000000', '#1a1a1a', '#2d2d2d']} style={styles.gradient}>
+        {/* Header */}
+        <View style={styles.header}>
+          <TouchableOpacity style={styles.menuButton} onPress={openMenu}>
+            <Ionicons name="menu" size={24} color="#fff" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>{i18n.t('myMedia') || 'My Media'}</Text>
+          <View style={styles.placeholder} />
+        </View>
+
+        <HamburgerMenu />
+
+        <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+          {/* Hero card */}
+          <View style={styles.heroCard}>
+            <View style={styles.heroStrip}>
+              <View style={styles.heroIconCircle}>
+                <Ionicons name="images-outline" size={22} color="#fff" />
+              </View>
+              <View style={styles.heroStripText}>
+                <Text style={styles.heroStripTitle}>{i18n.t('myMedia') || 'My Media'}</Text>
+                <Text style={styles.heroStripSub}>
+                  {mediaList.length === 0
+                    ? (i18n.t('mediaLibraryHint') || 'Your posts and footage will appear here.')
+                    : `${mediaList.length} post${mediaList.length !== 1 ? 's' : ''} · ${imageCount} photo${imageCount !== 1 ? 's' : ''} · ${videoCount} video${videoCount !== 1 ? 's' : ''}`}
+                </Text>
+              </View>
+            </View>
+          </View>
+
+          {mediaList.length === 0 ? (
+            <View style={styles.emptyContainer}>
+              <Ionicons name="images-outline" size={64} color="#555" />
+              <Text style={styles.emptyText}>{i18n.t('noMediaYet') || 'No posts yet'}</Text>
+              <Text style={styles.emptySubtext}>{i18n.t('uploadMediaToSee') || 'Upload media to see your posts here'}</Text>
+              <TouchableOpacity style={styles.uploadButton} onPress={() => router.push('/agent-upload-media')}>
+                <Ionicons name="add-circle-outline" size={18} color="#fff" />
+                <Text style={styles.uploadButtonText}>{i18n.t('uploadMedia') || 'Upload Media'}</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <>
+              {/* Stats */}
+              <View style={styles.statsRow}>
+                <View style={styles.statCard}>
+                  <Text style={styles.statValue}>{mediaList.length}</Text>
+                  <Text style={styles.statLabel}>{i18n.t('post') || 'Post'}</Text>
+                </View>
+                <View style={styles.statCard}>
+                  <Text style={styles.statValue}>{imageCount}</Text>
+                  <Text style={styles.statLabel}>{i18n.t('photos') || 'Photos'}</Text>
+                </View>
+                <View style={styles.statCard}>
+                  <Text style={styles.statValue}>{videoCount}</Text>
+                  <Text style={styles.statLabel}>{i18n.t('videos') || 'Videos'}</Text>
+                </View>
+              </View>
+
+              <TouchableOpacity style={styles.uploadAnotherButton} onPress={() => router.push('/agent-upload-media')} activeOpacity={0.85}>
+                <Ionicons name="add-circle-outline" size={18} color="#111827" />
+                <Text style={styles.uploadAnotherText}>{i18n.t('addAnotherPost') || 'Add another post'}</Text>
+              </TouchableOpacity>
+
+              <Text style={styles.sectionTitle}>{i18n.t('yourPosts') || 'Your posts'} ({mediaList.length})</Text>
+
+              {mediaList.map((media) => (
+                <View key={media.id} style={styles.mediaCard}>
+                  {/* Thumbnail */}
+                  <TouchableOpacity
+                    style={styles.mediaPreview}
+                    onPress={() => setFullScreenMedia({ uri: media.secureUrl, type: media.resourceType })}
+                    activeOpacity={0.9}
+                  >
+                    {media.resourceType === 'image' ? (
+                      <Image source={{ uri: media.secureUrl }} style={styles.mediaThumbnail} />
+                    ) : (
+                      <View style={styles.videoThumbnail}>
+                        <Ionicons name="play-circle" size={34} color="#fff" />
+                        <Text style={styles.videoLabel}>{i18n.t('video') || 'Video'}</Text>
+                      </View>
+                    )}
+                    <View style={styles.previewBadge}>
+                      <Text style={styles.previewBadgeText}>
+                        {media.resourceType === 'image' ? (i18n.t('image') || 'Image') : (i18n.t('video') || 'Video')}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+
+                  {/* Info */}
+                  <View style={styles.mediaInfo}>
+                    <View style={styles.mediaMetaRow}>
+                      <Text style={styles.mediaType}>
+                        {media.resourceType === 'image' ? (i18n.t('image') || 'Image') : (i18n.t('video') || 'Video')}
+                      </Text>
+                      <Text style={styles.mediaDate}>{formatMediaDate(media.createdAt)}</Text>
+                    </View>
+
+                    <Text style={[styles.mediaCaption, !media.content && styles.mediaCaptionPlaceholder]} numberOfLines={3}>
+                      {media.content || (i18n.t('noCaptionYet') || 'No caption yet. Tap edit to add one.')}
+                    </Text>
+
+                    <View style={styles.actions}>
+                      <TouchableOpacity style={styles.editButton} onPress={() => handleEdit(media)} disabled={deleting === media.id}>
+                        <Ionicons name="create-outline" size={16} color="#a5b4fc" />
+                        <Text style={styles.editButtonText}>{i18n.t('editCaption') || 'Edit'}</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity style={styles.deleteButton} onPress={() => handleDelete(media)} disabled={deleting === media.id}>
+                        {deleting === media.id ? (
+                          <ActivityIndicator size="small" color="#fca5a5" />
+                        ) : (
+                          <>
+                            <Ionicons name="trash-outline" size={16} color="#fca5a5" />
+                            <Text style={styles.deleteButtonText}>{i18n.t('delete') || 'Delete'}</Text>
+                          </>
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </View>
+              ))}
+            </>
+          )}
+        </ScrollView>
+
+        {/* Edit caption modal */}
+        <Modal visible={!!editingMedia} transparent animationType="slide" onRequestClose={() => setEditingMedia(null)}>
+          <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setEditingMedia(null)}>
+            <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()}>
+              <View style={styles.modalContent}>
+                <Text style={styles.modalTitle}>{i18n.t('editCaption') || 'Edit caption'}</Text>
+                <Text style={styles.modalHint}>{i18n.t('updateCaptionHint') || 'Update the caption shown on your feed.'}</Text>
+                <TextInput
+                  style={styles.captionInput}
+                  placeholder={i18n.t('captionPlaceholder') || 'Caption'}
+                  placeholderTextColor="#999"
+                  value={editCaption}
+                  onChangeText={setEditCaption}
+                  multiline
+                  numberOfLines={4}
+                  maxLength={CAPTION_LIMIT}
+                />
+                <Text style={styles.captionCount}>{editCaption.length}/{CAPTION_LIMIT}</Text>
+                <View style={styles.modalActions}>
+                  <TouchableOpacity style={[styles.modalButton, styles.cancelButton]} onPress={() => { setEditingMedia(null); setEditCaption(''); }}>
+                    <Text style={styles.cancelButtonText}>{i18n.t('cancel') || 'Cancel'}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.modalButton, styles.saveButton, (saving || unchangedCaption) && styles.modalSaveDisabled]}
+                    onPress={handleSaveEdit}
+                    disabled={saving || unchangedCaption}
+                  >
+                    {saving ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.saveButtonText}>{i18n.t('save') || 'Save'}</Text>}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </Modal>
+
+        {/* Full screen viewer */}
+        <Modal visible={!!fullScreenMedia} transparent={false} animationType="fade" onRequestClose={() => setFullScreenMedia(null)} statusBarTranslucent>
+          <TouchableOpacity style={styles.fullScreenContainer} activeOpacity={1} onPress={() => setFullScreenMedia(null)}>
+            <TouchableOpacity style={styles.fullScreenCloseButton} onPress={() => setFullScreenMedia(null)} activeOpacity={0.7}>
+              <Ionicons name="close" size={32} color="#fff" />
+            </TouchableOpacity>
+            {fullScreenMedia && (
+              <View style={styles.fullScreenContent} pointerEvents="none">
+                {fullScreenMedia.type === 'video' ? (
+                  <Video source={{ uri: fullScreenMedia.uri }} style={styles.fullScreenVideo} useNativeControls resizeMode={ResizeMode.CONTAIN} isLooping={false} />
+                ) : (
+                  <Image source={{ uri: fullScreenMedia.uri }} style={styles.fullScreenImage} resizeMode="contain" />
+                )}
+              </View>
+            )}
+          </TouchableOpacity>
+        </Modal>
+      </LinearGradient>
+    </KeyboardAvoidingView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1 },
+  gradient: { flex: 1 },
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  loadingText: { color: '#fff', marginTop: 12, fontSize: 16 },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingTop: Platform.OS === 'ios' ? 60 : 40,
+    paddingHorizontal: 20,
+    paddingBottom: 20,
+  },
+  menuButton: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  headerTitle: { fontSize: 24, fontWeight: 'bold', color: '#fff' },
+  placeholder: { width: 40 },
+  scrollView: { flex: 1 },
+  scrollContent: { padding: 20, paddingBottom: 40 },
+
+  heroCard: {
+    borderRadius: 18,
+    overflow: 'hidden',
+    marginBottom: 20,
+    backgroundColor: '#fff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    elevation: 5,
+  },
+  heroStrip: {
+    backgroundColor: '#111',
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    gap: 14,
+  },
+  heroIconCircle: {
+    width: 46, height: 46, borderRadius: 23,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  heroStripText: { flex: 1 },
+  heroStripTitle: { color: '#fff', fontSize: 17, fontWeight: '800', marginBottom: 3 },
+  heroStripSub: { color: 'rgba(255,255,255,0.6)', fontSize: 13 },
+
+  emptyContainer: {
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 52,
+    paddingHorizontal: 20,
+  },
+  emptyText: { color: '#f3f4f6', fontSize: 20, marginTop: 16, fontWeight: '700' },
+  emptySubtext: { color: '#9ca3af', fontSize: 14, marginBottom: 24, textAlign: 'center', lineHeight: 20 },
+  uploadButton: {
+    backgroundColor: '#000',
+    paddingHorizontal: 24, paddingVertical: 12,
+    borderRadius: 12,
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+  },
+  uploadButtonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+
+  statsRow: { flexDirection: 'row', gap: 10, marginBottom: 14 },
+  statCard: {
+    flex: 1,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderRadius: 14,
+    paddingVertical: 14, alignItems: 'center',
+  },
+  statValue: { color: '#fff', fontSize: 20, fontWeight: '800', marginBottom: 4 },
+  statLabel: { color: '#cbd5e1', fontSize: 12, fontWeight: '600' },
+
+  uploadAnotherButton: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    borderRadius: 14, paddingVertical: 12, marginBottom: 16,
+  },
+  uploadAnotherText: { color: '#111827', fontSize: 14, fontWeight: '700' },
+
+  sectionTitle: { fontSize: 18, fontWeight: '800', color: '#fff', marginBottom: 14 },
+
+  mediaCard: {
+    flexDirection: 'row',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 16,
+    padding: 12,
+    marginBottom: 12,
+    alignItems: 'stretch',
+  },
+  mediaPreview: {
+    width: 116, height: 116, borderRadius: 12,
+    overflow: 'hidden', marginRight: 12, position: 'relative',
+  },
+  mediaThumbnail: { width: '100%', height: '100%', resizeMode: 'cover' },
+  videoThumbnail: {
+    width: '100%', height: '100%',
+    backgroundColor: '#222',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  videoLabel: { color: '#fff', fontSize: 12, marginTop: 4, fontWeight: '700' },
+  previewBadge: {
+    position: 'absolute', left: 8, bottom: 8,
+    backgroundColor: 'rgba(17,24,39,0.88)',
+    paddingHorizontal: 8, paddingVertical: 4,
+    borderRadius: 999,
+  },
+  previewBadgeText: { color: '#fff', fontSize: 10, fontWeight: '700' },
+
+  mediaInfo: { flex: 1, justifyContent: 'space-between' },
+  mediaMetaRow: {
+    flexDirection: 'row', justifyContent: 'space-between',
+    alignItems: 'center', gap: 8, marginBottom: 6,
+  },
+  mediaType: { fontSize: 15, fontWeight: '700', color: '#fff' },
+  mediaDate: { fontSize: 12, color: '#94a3b8', fontWeight: '600' },
+  mediaCaption: { fontSize: 13, color: '#e2e8f0', marginBottom: 8, lineHeight: 18 },
+  mediaCaptionPlaceholder: { color: '#6b7280', fontStyle: 'italic' },
+
+  actions: { flexDirection: 'row', gap: 8 },
+  editButton: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: 10, paddingVertical: 8,
+    borderRadius: 10, backgroundColor: 'rgba(99,102,241,0.2)',
+  },
+  editButtonText: { color: '#a5b4fc', fontSize: 12, fontWeight: '700' },
+  deleteButton: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: 10, paddingVertical: 8,
+    borderRadius: 10, backgroundColor: 'rgba(239,68,68,0.2)',
+  },
+  deleteButtonText: { color: '#fca5a5', fontSize: 12, fontWeight: '700' },
+
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  modalContent: {
+    backgroundColor: '#1a1a1a',
+    borderRadius: 18, padding: 24,
+    width: '90%', maxWidth: 400,
+  },
+  modalTitle: { fontSize: 20, fontWeight: 'bold', color: '#fff', marginBottom: 8, textAlign: 'center' },
+  modalHint: { fontSize: 13, color: '#94a3b8', lineHeight: 18, textAlign: 'center', marginBottom: 12 },
+  captionInput: {
+    backgroundColor: '#2d2d2d',
+    borderRadius: 10, padding: 12,
+    color: '#fff', fontSize: 16,
+    marginBottom: 8, minHeight: 100, textAlignVertical: 'top',
+  },
+  captionCount: { color: '#9ca3af', fontSize: 12, textAlign: 'right', marginBottom: 14 },
+  modalActions: { flexDirection: 'row', justifyContent: 'space-between', gap: 12 },
+  modalButton: { flex: 1, padding: 12, borderRadius: 10, alignItems: 'center' },
+  cancelButton: { backgroundColor: '#374151' },
+  saveButton: { backgroundColor: '#6366f1' },
+  modalSaveDisabled: { opacity: 0.5 },
+  cancelButtonText: { color: '#fff', fontSize: 15, fontWeight: '600' },
+  saveButtonText: { color: '#fff', fontSize: 15, fontWeight: '700' },
+
+  fullScreenContainer: {
+    flex: 1, backgroundColor: '#000',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  fullScreenCloseButton: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 50 : 40, right: 20,
+    zIndex: 10,
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  fullScreenContent: { width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' },
+  fullScreenImage: { width: '100%', height: '100%' },
+  fullScreenVideo: { width: '100%', height: '100%' },
+});

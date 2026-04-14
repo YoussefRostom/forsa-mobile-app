@@ -15,6 +15,7 @@ interface MenuItem {
   route: string;
   icon: string;
   special?: boolean;
+  comingSoon?: boolean;
   dividerBefore?: boolean;
 }
 
@@ -37,6 +38,7 @@ export default function HamburgerMenu() {
       currentPath.includes('/agent-players') ||
       currentPath.includes('/agent-contacts') ||
       currentPath.includes('/agent-upload-media') ||
+      currentPath.includes('/agent-my-media') ||
       currentPath.includes('/agent-services')) {
       return 'agent';
     }
@@ -61,7 +63,6 @@ export default function HamburgerMenu() {
       currentPath.includes('/academy-chat') ||
       currentPath.includes('/academy-home') ||
       currentPath.includes('/academy-bookings') ||
-      currentPath.includes('/academy-search-clinics') ||
       currentPath.includes('/academy-clinic-details')) {
       return 'academy';
     }
@@ -103,7 +104,7 @@ export default function HamburgerMenu() {
 
     // Add Admin Dashboard link for admins
     if (user?.role === 'admin') {
-      items.push({ label: 'Admin Dashboard', route: '/(admin)/dashboard', icon: 'shield-checkmark-outline', special: true });
+      items.push({ label: 'Admin Dashboard', route: '/(admin)/dashboard', icon: 'shield-checkmark-outline' });
     }
 
     switch (role) {
@@ -126,16 +127,16 @@ export default function HamburgerMenu() {
         { label: i18n.t('notifications') || 'Notifications', route: '/notifications', icon: 'notifications-outline' },
         { label: i18n.t('agentPlayers') || 'Players', route: '/agent-players', icon: 'people-outline' },
         { label: i18n.t('messages') || 'Messages', route: '/agent-contacts', icon: 'chatbubbles-outline' },
+        { label: i18n.t('myMedia') || 'My Media', route: '/agent-my-media', icon: 'images-outline' },
         { label: i18n.t('uploadMedia') || 'Upload Media', route: '/agent-upload-media', icon: 'cloud-upload-outline' },
         ];
         break;
       case 'clinic':
         items = [...items,
         { label: i18n.t('clinicFeed') || 'Clinic Feed', route: '/clinic-feed', icon: 'home-outline' },
-        { label: 'Scan Check-in', route: '/scan-checkin', icon: 'qr-code-outline', special: true },
+        { label: 'Scan Check-in', route: '/scan-checkin', icon: 'qr-code-outline' },
         { label: i18n.t('notifications') || 'Notifications', route: '/notifications', icon: 'notifications-outline' },
         { label: i18n.t('editServices') || 'Edit Services', route: '/clinic-edit-services', icon: 'list-outline' },
-        { label: i18n.t('editTimetable') || 'Edit Timetable', route: '/clinic-edit-timetable', icon: 'time-outline' },
         { label: i18n.t('myBookings') || 'My Bookings', route: '/clinic-bookings', icon: 'calendar-outline' },
         { label: i18n.t('messages') || 'Messages', route: '/clinic-messages', icon: 'chatbubbles-outline' },
         ];
@@ -143,11 +144,10 @@ export default function HamburgerMenu() {
       case 'academy':
         items = [...items,
         { label: i18n.t('academyFeed') || 'Feed', route: '/academy-feed', icon: 'home-outline' },
-        { label: 'Scan Check-in', route: '/scan-checkin', icon: 'qr-code-outline', special: true },
+        { label: 'Scan Check-in', route: '/scan-checkin', icon: 'qr-code-outline' },
         { label: i18n.t('notifications') || 'Notifications', route: '/notifications', icon: 'notifications-outline' },
         { label: i18n.t('academyEditProfile') || 'Edit Profile', route: '/academy-edit-profile', icon: 'create-outline' },
         { label: i18n.t('academyUploadMedia') || 'Upload Media', route: '/academy-upload-media', icon: 'cloud-upload-outline' },
-        { label: i18n.t('searchClinics') || 'Search Clinics', route: '/academy-search-clinics', icon: 'medical-outline' },
         { label: i18n.t('myBookings') || 'My Bookings', route: '/academy-bookings', icon: 'calendar-outline' },
         { label: i18n.t('academyMessages') || 'Messages', route: '/academy-messages', icon: 'chatbubbles-outline' },
         ];
@@ -163,7 +163,6 @@ export default function HamburgerMenu() {
         { label: i18n.t('messages') || 'Messages', route: '/player-messages', icon: 'chatbubbles-outline' },
         { label: i18n.t('myBookings') || 'My Bookings', route: '/player-bookings', icon: 'calendar-outline' },
         { label: i18n.t('searchAcademies') || 'Search Academies', route: '/academy-search', icon: 'school-outline' },
-        { label: i18n.t('searchAgents') || 'Search Agents', route: '/agent-search', icon: 'people-outline' },
         { label: i18n.t('clinicSearch') || 'Clinic Search', route: '/clinic-search', icon: 'medical-outline' },
         ];
     }
@@ -201,34 +200,14 @@ export default function HamburgerMenu() {
   };
 
   return (
+
     <Modal visible={visible} animationType="fade" transparent onRequestClose={closeMenu}>
       <View style={styles.modalContainer}>
         <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={closeMenu} />
         <View style={styles.menuBox}>
           <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-            {/* Gold Header Item */}
-            {(role === 'player' || role === 'agent' || role === 'clinic' || role === 'academy') && (
-              <TouchableOpacity
-                style={[styles.menuItem, styles.goldMenuItem]}
-                onPress={() => {
-                  closeMenu();
-                  Alert.alert(
-                    i18n.t('comingSoon') || 'Coming Soon',
-                    i18n.t('comingSoonMessage') || 'This feature is coming soon!',
-                    [{ text: i18n.t('ok') || 'OK' }]
-                  );
-                }}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="star" size={20} color="#000" style={styles.menuIcon} />
-                <Text style={[styles.menuText, styles.goldMenuText]}>
-                  {assistanceLabel}
-                </Text>
-              </TouchableOpacity>
-            )}
-
-            {/* Regular Menu Items */}
-            {menuItems.map((item, index) => (
+            {/* Regular Menu Items (no coming soon) */}
+            {menuItems.filter(item => !item.comingSoon).map((item, index) => (
               <React.Fragment key={item.route}>
                 {item.dividerBefore && <View style={styles.divider} />}
                 <TouchableOpacity
@@ -236,8 +215,15 @@ export default function HamburgerMenu() {
                   onPress={() => handleNavigate(item.route)}
                   activeOpacity={0.7}
                 >
-                  <Ionicons name={item.icon as any} size={20} color="#000" style={styles.menuIcon} />
-                  <Text style={styles.menuText}>{item.label}</Text>
+                  <Ionicons
+                    name={item.icon as any}
+                    size={20}
+                    color={'#000'}
+                    style={styles.menuIcon}
+                  />
+                  <Text style={styles.menuText}>
+                    {item.label}
+                  </Text>
                   {item.route === '/notifications' && unreadNotificationCount > 0 && (
                     <View style={styles.unreadBadge}>
                       <Text style={styles.unreadBadgeText}>
@@ -392,6 +378,53 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     fontSize: 17,
     letterSpacing: 0.3,
+  },
+  specialMenuItemContainer: {
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  specialMenuText: {
+    color: '#999',
+  },
+  comingSoonBlurredText: {
+    color: 'transparent',
+    textShadowColor: 'rgba(100, 100, 100, 0.65)',
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 12,
+  },
+  comingSoonBlurredIcon: {
+    opacity: 0.15,
+  },
+  comingSoonOverlay: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  diagonalBannerContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  diagonalBanner: {
+    position: 'absolute',
+    width: '160%',
+    height: 26,
+    backgroundColor: 'rgba(80, 80, 80, 0.88)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    transform: [{ rotate: '-18deg' }],
+  },
+  diagonalBannerText: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 11,
+    letterSpacing: 2,
+    textTransform: 'uppercase',
   },
   signOutText: {
     color: '#ff3b30',

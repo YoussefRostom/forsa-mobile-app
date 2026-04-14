@@ -8,6 +8,7 @@ import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import i18n from '../locales/i18n';
 import { subscribeToConversations, Conversation, findAdminUserId, getOrCreateConversation } from '../services/MessagingService';
 import { getChattableUsers, startConversationWithUser } from '../services/BookingMessagingService';
+import { auth } from '../lib/firebase';
 
 export default function PlayerMessagesScreen() {
   const { openMenu } = useHamburgerMenu();
@@ -74,7 +75,7 @@ export default function PlayerMessagesScreen() {
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <LinearGradient
-        colors={['#000000', '#1a1a1a', '#2d2d2d']}
+        colors={['#000000', '#000000', '#111111']}
         style={styles.gradient}
       >
       <HamburgerMenu />
@@ -88,14 +89,14 @@ export default function PlayerMessagesScreen() {
               <TouchableOpacity onPress={async () => {
                 try {
                   const adminId = await findAdminUserId();
-                  if (!adminId) { Alert.alert('No admin found'); return; }
+                  if (!adminId) { Alert.alert(i18n.t('noAdminFound') || 'No admin found'); return; }
                   const convId = await getOrCreateConversation(adminId);
                   router.push({ pathname: '/player-chat', params: { conversationId: convId, otherUserId: adminId, name: 'Admin' } });
                 } catch (err) { console.error(err); }
               }}>
                 <View style={styles.textAdminBtn}>
                   <Ionicons name="chatbubble-ellipses-outline" size={16} color="#fff" style={{marginRight: 6}} />
-                  <Text style={styles.textAdminText}>Text Admin</Text>
+                  <Text style={styles.textAdminText}>{i18n.t('textAdmin') || 'Text Admin'}</Text>
                 </View>
               </TouchableOpacity>
             </View>
@@ -124,7 +125,7 @@ export default function PlayerMessagesScreen() {
                   <ActivityIndicator size="small" color="#fff" style={{ marginTop: 20 }} />
                 ) : chattableUsers.length > 0 ? (
                   <View style={styles.chattableUsersContainer}>
-                    <Text style={styles.chattableUsersTitle}>Start a conversation:</Text>
+                    <Text style={styles.chattableUsersTitle}>{i18n.t('startConversationLabel') || 'Start a conversation:'}</Text>
                     {chattableUsers.map((user) => (
                       <TouchableOpacity
                         key={user.userId}
@@ -150,15 +151,17 @@ export default function PlayerMessagesScreen() {
                     onPress={() => router.push('/player-bookings')}
                     activeOpacity={0.8}
                   >
-                    <Text style={styles.viewBookingsButtonText}>View My Bookings</Text>
+                    <Text style={styles.viewBookingsButtonText}>{i18n.t('viewMyBookings') || 'View My Bookings'}</Text>
                   </TouchableOpacity>
                 )}
               </View>
             ) : (
               conversations.map((item) => {
                 const displayName = item.otherParticipantName || 'Unknown';
-                const lastMsg = item.lastMessage || '';
                 const unreadCount = item.unreadCount || 0;
+                const lastMsg = item.lastMessage
+                  ? `${item.lastMessageSenderId === auth.currentUser?.uid ? `${i18n.t('you') || 'You'}: ` : ''}${item.lastMessage}`
+                  : '';
                 const lastMsgTime = item.lastMessageAt?.toDate?.() 
                   ? new Date(item.lastMessageAt.toDate()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                   : '';
@@ -186,19 +189,24 @@ export default function PlayerMessagesScreen() {
                     </View>
                     <View style={styles.conversationContent}>
                       <View style={styles.conversationHeader}>
-                        <Text style={styles.conversationName}>{displayName}</Text>
-                        {unreadCount > 0 && (
-                          <View style={styles.unreadBadge}>
-                            <Text style={styles.unreadText}>{unreadCount}</Text>
-                          </View>
-                        )}
+                        <View style={styles.nameBlock}>
+                          <Text style={styles.conversationName}>{displayName}</Text>
+                          {!!item.otherParticipantRole && (
+                            <Text style={styles.conversationRole}>{String(item.otherParticipantRole).replace(/_/g, ' ')}</Text>
+                          )}
+                        </View>
+                        <View style={styles.metaColumn}>
+                          {!!lastMsgTime && <Text style={styles.lastMessageTime}>{lastMsgTime}</Text>}
+                          {unreadCount > 0 && (
+                            <View style={styles.unreadBadge}>
+                              <Text style={styles.unreadText}>{unreadCount}</Text>
+                            </View>
+                          )}
+                        </View>
                       </View>
-                      <Text style={styles.lastMessage} numberOfLines={1}>
+                      <Text style={[styles.lastMessage, unreadCount > 0 && styles.lastMessageUnread]} numberOfLines={1}>
                         {lastMsg || 'No messages yet'}
                       </Text>
-                      {lastMsgTime && (
-                        <Text style={styles.lastMessageTime}>{lastMsgTime}</Text>
-                      )}
                   </View>
                     <Ionicons name="chevron-forward" size={20} color="#999" />
                 </TouchableOpacity>
@@ -269,13 +277,17 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   scrollContent: {
-    paddingHorizontal: 24,
-    paddingBottom: 40,
+    paddingHorizontal: 20,
+    paddingBottom: 36,
   },
   emptyContainer: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 80,
+    paddingVertical: 40,
+    paddingHorizontal: 20,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 24,
+    marginTop: 8,
   },
   emptyText: {
     color: '#fff',
@@ -292,19 +304,30 @@ const styles = StyleSheet.create({
   },
   conversationCard: {
     backgroundColor: '#fff',
-    borderRadius: 24,
-    padding: 20,
-    marginBottom: 16,
+    borderRadius: 20,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    marginBottom: 12,
     flexDirection: 'row',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.3,
-    shadowRadius: 20,
-    elevation: 10,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 3,
   },
   avatarContainer: {
-    marginRight: 16,
+    marginRight: 14,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#f3f4f6',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
   },
   avatarImage: {
     width: 48,
@@ -316,23 +339,37 @@ const styles = StyleSheet.create({
   },
   conversationHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
-    marginBottom: 4,
+    marginBottom: 6,
+  },
+  nameBlock: {
+    flex: 1,
+    paddingRight: 10,
   },
   conversationName: {
-    fontWeight: 'bold',
+    fontWeight: '700',
     fontSize: 16,
-    color: '#000',
+    color: '#000000',
+  },
+  conversationRole: {
+    marginTop: 3,
+    fontSize: 11,
+    color: '#6b7280',
+    textTransform: 'capitalize',
+  },
+  metaColumn: {
+    alignItems: 'flex-end',
+    gap: 6,
   },
   unreadBadge: {
-    backgroundColor: '#000',
-    borderRadius: 12,
-    minWidth: 24,
-    height: 24,
+    backgroundColor: '#000000',
+    borderRadius: 999,
+    minWidth: 22,
+    height: 22,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 8,
+    paddingHorizontal: 7,
   },
   unreadText: {
     color: '#fff',
@@ -340,9 +377,13 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   lastMessage: {
-    color: '#666',
-    fontSize: 14,
-    marginTop: 4,
+    color: '#6b7280',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  lastMessageUnread: {
+    color: '#374151',
+    fontWeight: '600',
   },
   lastMessageTime: {
     fontSize: 12,
@@ -398,3 +439,4 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 });
+

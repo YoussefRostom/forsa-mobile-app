@@ -181,17 +181,17 @@ const SignInScreen = () => {
       }
 
       const userData: any = userDoc.data();
-      const role = userData.role;
-      const status = userData.status;
+      const role = String(userData?.role || '').toLowerCase();
+      const isSuspended = userData?.isSuspended === true || String(userData?.status || '').toLowerCase() === 'suspended';
 
       // Check if user is suspended
-      if (status === "suspended") {
+      if (isSuspended) {
         await auth.signOut();
         throw new Error("Your account has been suspended. Please contact support.");
       }
 
       // Use the Integrated AuthContext for role-based navigation and state
-      await login(authEmail, role === "admin" ? "admin" : "user");
+      await login(authEmail, role === "admin" ? "admin" : (role as any || "user"));
 
       // ✅ Navigate based on role
       if (role === "admin") {

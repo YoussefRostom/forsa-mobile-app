@@ -1,14 +1,35 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, ActivityIndicator, TextInput } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
-import { db } from '../../../lib/firebase';
+import { auth, db } from '../../../lib/firebase';
+import { addAdminNote, logAdminAction, subscribeAdminNotes } from '../../../services/AdminOpsService';
+
+const resolveDisplayName = (user: any) => {
+    const fullName = `${user?.firstName || ''} ${user?.lastName || ''}`.trim();
+
+    return (
+        user?.name ||
+        user?.academyName ||
+        user?.clinicName ||
+        user?.parentName ||
+        user?.playerName ||
+        user?.agentName ||
+        fullName ||
+        user?.email ||
+        user?.phone ||
+        'Unknown User'
+    );
+};
 
 export default function UserDetails() {
     const { id } = useLocalSearchParams();
     const [user, setUser] = useState<any | null>(null);
     const [loading, setLoading] = useState(true);
+    const [adminNotes, setAdminNotes] = useState<any[]>([]);
+    const [newNote, setNewNote] = useState('');
+    const [savingNote, setSavingNote] = useState(false);
     const router = useRouter();
 
     useEffect(() => {
@@ -20,16 +41,22 @@ export default function UserDetails() {
                 if (docSnap.exists()) {
                     setUser({ id: docSnap.id, ...docSnap.data() });
                 } else {
-                    Alert.alert("Error", "User not found");
+                    Alert.alert('Error', 'User not found');
                 }
             } catch (error) {
-                console.error("Error fetching user details:", error);
+                console.error('Error fetching user details:', error);
             } finally {
                 setLoading(false);
             }
         };
 
         fetchUser();
+    }, [id]);
+
+    useEffect(() => {
+        if (!id) return;
+        const unsubscribe = subscribeAdminNotes(id as string, setAdminNotes);
+        return unsubscribe;
     }, [id]);
 
     const handleStatusChange = (newStatus: string) => {
@@ -39,8 +66,19 @@ export default function UserDetails() {
                 text: "Update", onPress: async () => {
                     try {
                         const docRef = doc(db, 'users', id as string);
-                        await updateDoc(docRef, { status: newStatus });
-                        setUser((prev: any) => prev ? { ...prev, status: newStatus } : null);
+                        await updateDoc(docRef, {
+                            status: newStatus,
+                            isSuspended: newStatus === 'suspended',
+                        });
+                        setUser((prev: any) => prev ? { ...prev, status: newStatus, isSuspended: newStatus === 'suspended' } : null);
+                        await logAdminAction({
+                            actionType: newStatus === 'suspended' ? 'user_suspended' : 'user_unsuspended',
+                            targetCollection: 'users',
+                            targetId: id as string,
+                            reason: `User status changed to ${newStatus}`,
+                            actorId: auth.currentUser?.uid,
+                            metadata: { newStatus },
+                        });
                     } catch (error) {
                         console.error("Error updating status:", error);
                         Alert.alert("Error", "Failed to update status");
@@ -50,20 +88,34 @@ export default function UserDetails() {
         ]);
     };
 
+    const handleAddNote = async () => {
+        if (!newNote.trim()) {
+            Alert.alert('Note required', 'Please write a note first.');
+            return;
+        }
+        setSavingNote(true);
+        try {
+            await addAdminNote({
+                targetUserId: id as string,
+                note: newNote,
+                actorId: auth.currentUser?.uid,
+                category: 'support',
+            });
+            setNewNote('');
+        } catch (error) {
+            console.error('Error adding admin note:', error);
+            Alert.alert('Error', 'Failed to save note');
+        } finally {
+            setSavingNote(false);
+        }
+    };
+
     if (loading) return <View style={styles.center}><ActivityIndicator size="large" color="#000" /></View>;
     if (!user) return <View style={styles.center}><Text>User not found</Text></View>;
 
-    const getDisplayName = () => {
-        if (user.name) return user.name;
-        if (user.firstName || user.lastName) {
-            return `${user.firstName || ''} ${user.lastName || ''}`.trim() || 'No Name Provided';
-        }
-        return 'Unknown User';
-    };
-
-    const displayName = getDisplayName();
+    const displayName = resolveDisplayName(user);
     const role = user.role || 'No Role';
-    const status = user.status || 'pending';
+    const status = user.status || 'active';
 
     return (
         <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 40 }}>
@@ -97,14 +149,36 @@ export default function UserDetails() {
                 <Text style={styles.instr}>Update Account Status:</Text>
                 <View style={styles.buttonRow}>
                     <TouchableOpacity style={[styles.btn, styles.approveBtn]} onPress={() => handleStatusChange('active')}>
-                        <Text style={styles.btnText}>Approve</Text>
+                        <Text style={styles.btnText}>Activate</Text>
                     </TouchableOpacity>
                     <TouchableOpacity style={[styles.btn, styles.suspendBtn]} onPress={() => handleStatusChange('suspended')}>
                         <Text style={styles.btnText}>Suspend</Text>
                     </TouchableOpacity>
-                    <TouchableOpacity style={[styles.btn, styles.rejectBtn]} onPress={() => handleStatusChange('pending')}>
-                        <Text style={styles.btnText}>Reject</Text>
-                    </TouchableOpacity>
+                </View>
+            </View>
+
+            <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Internal Admin Notes</Text>
+                <TextInput
+                    style={styles.noteInput}
+                    multiline
+                    placeholder="Add a private note for support, moderation, or payout follow-up"
+                    placeholderTextColor="#94a3b8"
+                    value={newNote}
+                    onChangeText={setNewNote}
+                />
+                <TouchableOpacity style={[styles.btn, styles.approveBtn, { marginHorizontal: 0, marginTop: 10 }]} onPress={handleAddNote}>
+                    {savingNote ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>Save Note</Text>}
+                </TouchableOpacity>
+
+                <View style={{ marginTop: 16 }}>
+                    {adminNotes.map((note) => (
+                        <View key={note.id} style={styles.noteCard}>
+                            <Text style={styles.noteText}>{note.note}</Text>
+                            <Text style={styles.noteMeta}>{note.category || 'general'}</Text>
+                        </View>
+                    ))}
+                    {!adminNotes.length && <Text style={styles.instr}>No internal notes yet.</Text>}
                 </View>
             </View>
         </ScrollView>
@@ -132,5 +206,34 @@ const styles = StyleSheet.create({
     approveBtn: { backgroundColor: '#1cc88a' },
     suspendBtn: { backgroundColor: '#e74a3b' },
     rejectBtn: { backgroundColor: '#f6c23e' },
-    btnText: { color: '#fff', fontWeight: 'bold', fontSize: 14 }
+    btnText: { color: '#fff', fontWeight: 'bold', fontSize: 14 },
+    noteInput: {
+        minHeight: 90,
+        borderWidth: 1,
+        borderColor: '#dbe2ea',
+        borderRadius: 10,
+        padding: 12,
+        textAlignVertical: 'top',
+        color: '#334155',
+        backgroundColor: '#f8fafc',
+    },
+    noteCard: {
+        backgroundColor: '#f8fafc',
+        borderRadius: 10,
+        padding: 12,
+        marginBottom: 10,
+        borderWidth: 1,
+        borderColor: '#e2e8f0',
+    },
+    noteText: {
+        color: '#334155',
+        fontSize: 14,
+        marginBottom: 4,
+    },
+    noteMeta: {
+        color: '#64748b',
+        fontSize: 12,
+        textTransform: 'uppercase',
+        fontWeight: '700',
+    }
 });

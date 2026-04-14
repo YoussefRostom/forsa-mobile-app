@@ -7,31 +7,19 @@ import {
   Alert,
   ActivityIndicator,
   ScrollView,
-  Clipboard,
   Platform,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import PureQRCode from '../components/PureQRCode';
+import i18n from '../locales/i18n';
 import { getCurrentUserCheckInCode, ensureCheckInCodeForCurrentUser } from '../services/CheckInCodeService';
 import { auth, db } from '../lib/firebase';
 import { doc, getDoc } from 'firebase/firestore';
-// Note: For production, install react-native-qrcode-svg:
-// npm install react-native-qrcode-svg react-native-svg
-// Then import: import QRCode from 'react-native-qrcode-svg';
 
-// Simple QR Code placeholder component
-// TODO: Replace with react-native-qrcode-svg for production
 function SimpleQRCode({ value, size = 250 }: { value: string; size?: number }) {
-  // This is a placeholder - install react-native-qrcode-svg for real QR codes
-  return (
-    <View style={[styles.qrPlaceholder, { width: size, height: size }]}>
-      <Ionicons name="qr-code" size={size * 0.6} color="#000" />
-      <Text style={styles.qrPlaceholderText}>QR Code</Text>
-      <Text style={styles.qrPlaceholderSubtext} numberOfLines={1}>
-        {value.substring(0, 30)}...
-      </Text>
-    </View>
-  );
+  return <PureQRCode value={value || 'forsa_checkin:unavailable'} size={size} color="#000" backgroundColor="#fff" quietZone={12} />;
 }
 
 export default function MyQrCodeScreen() {
@@ -59,7 +47,7 @@ export default function MyQrCodeScreen() {
           code = await ensureCheckInCodeForCurrentUser();
         } catch (error: any) {
           console.error('Error generating check-in code:', error);
-          Alert.alert('Error', 'Failed to generate check-in code. Please try again.');
+          Alert.alert(i18n.t('error') || 'Error', i18n.t('checkInFailedTryAgain') || 'Failed to process check-in. Please try again.');
           router.back();
           return;
         } finally {
@@ -89,16 +77,16 @@ export default function MyQrCodeScreen() {
       }
     } catch (error: any) {
       console.error('Error loading QR code:', error);
-      Alert.alert('Error', 'Failed to load QR code');
+      Alert.alert(i18n.t('error') || 'Error', i18n.t('qrCodeUnavailable') || 'QR code not available');
     } finally {
       setLoading(false);
     }
   };
 
-  const copyCode = () => {
+  const copyCode = async () => {
     if (checkInCode) {
-      Clipboard.setString(checkInCode);
-      Alert.alert('Copied', 'Check-in code copied to clipboard');
+      await Clipboard.setStringAsync(checkInCode);
+      Alert.alert(i18n.t('copied') || 'Copied', i18n.t('checkInCodeCopied') || 'Check-in code copied to clipboard');
     }
   };
 
@@ -111,13 +99,13 @@ export default function MyQrCodeScreen() {
           <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color="#000" />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>My QR Code</Text>
+          <Text style={styles.headerTitle}>{i18n.t('myQrCode') || 'My QR Code'}</Text>
           <View style={{ width: 40 }} />
         </View>
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#007AFF" />
           <Text style={styles.loadingText}>
-            {generating ? 'Generating QR code...' : 'Loading...'}
+            {generating ? (i18n.t('generatingQrCode') || 'Generating QR code...') : (i18n.t('loading') || 'Loading...')}
           </Text>
         </View>
       </View>
@@ -131,14 +119,14 @@ export default function MyQrCodeScreen() {
           <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color="#000" />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>My QR Code</Text>
+          <Text style={styles.headerTitle}>{i18n.t('myQrCode') || 'My QR Code'}</Text>
           <View style={{ width: 40 }} />
         </View>
         <View style={styles.errorContainer}>
           <Ionicons name="alert-circle-outline" size={64} color="#FF3B30" />
-          <Text style={styles.errorText}>QR code not available</Text>
+          <Text style={styles.errorText}>{i18n.t('qrCodeUnavailable') || 'QR code not available'}</Text>
           <Text style={styles.errorSubtext}>
-            Check-in codes are only available for players and parents.
+            {i18n.t('checkInCodesLimited') || 'Check-in codes are only available for players and parents.'}
           </Text>
         </View>
       </View>
@@ -151,7 +139,7 @@ export default function MyQrCodeScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
           <Ionicons name="arrow-back" size={24} color="#000" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>My QR Code</Text>
+        <Text style={styles.headerTitle}>{i18n.t('myQrCode') || 'My QR Code'}</Text>
         <View style={{ width: 40 }} />
       </View>
 
@@ -165,7 +153,7 @@ export default function MyQrCodeScreen() {
         </View>
 
         <View style={styles.codeContainer}>
-          <Text style={styles.codeLabel}>Check-in Code</Text>
+          <Text style={styles.codeLabel}>{i18n.t('checkInCode') || 'Check-in Code'}</Text>
           <TouchableOpacity
             style={styles.codeBox}
             onPress={copyCode}
@@ -182,13 +170,13 @@ export default function MyQrCodeScreen() {
           activeOpacity={0.7}
         >
           <Ionicons name="copy" size={20} color="#fff" />
-          <Text style={styles.copyButtonText}>Copy Code</Text>
+          <Text style={styles.copyButtonText}>{i18n.t('copyCode') || 'Copy Code'}</Text>
         </TouchableOpacity>
 
         <View style={styles.infoBox}>
           <Ionicons name="information-circle-outline" size={20} color="#666" />
           <Text style={styles.infoText}>
-            Show this QR code to academy or clinic staff to check in.
+            {i18n.t('showQrToStaff') || 'Show this QR code to academy or clinic staff to check in.'}
           </Text>
         </View>
       </View>

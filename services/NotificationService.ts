@@ -12,6 +12,7 @@ import {
   serverTimestamp,
   limit,
 } from 'firebase/firestore';
+import { sendPushNotificationsToUsers } from './PushNotificationService';
 
 export type NotificationType = 'booking' | 'checkin' | 'report' | 'info' | 'system';
 
@@ -35,7 +36,7 @@ export async function getAdminUserIds(): Promise<string[]> {
   const usersRef = collection(db, 'users');
   const q = query(
     usersRef,
-    where('role', 'in', ['admin', 'Admin'])
+    where('role', 'in', ['admin', 'Admin', 'ADMIN'])
   );
   const snapshot = await getDocs(q);
   return snapshot.docs.map(d => d.id);
@@ -65,6 +66,11 @@ export async function createNotification(params: {
     createdBy: user.uid,
     data: params.data || null,
   });
+
+  if (params.userId !== user.uid) {
+    await sendPushNotificationsToUsers([params.userId], params.title, params.body, params.data);
+  }
+
   return ref.id;
 }
 
@@ -168,4 +174,21 @@ export async function markAsRead(notificationId: string): Promise<void> {
 
   const notifRef = doc(db, 'notifications', notificationId);
   await updateDoc(notifRef, { read: true });
+}
+
+export async function markAllNotificationsAsRead(): Promise<void> {
+  const uid = auth.currentUser?.uid;
+  if (!uid) throw new Error('Must be authenticated');
+
+  const notificationsRef = collection(db, 'notifications');
+  const unreadQuery = query(
+    notificationsRef,
+    where('userId', '==', uid),
+    where('read', '==', false)
+  );
+  const snapshot = await getDocs(unreadQuery);
+
+  await Promise.all(
+    snapshot.docs.map((docSnap) => updateDoc(doc(db, 'notifications', docSnap.id), { read: true }))
+  );
 }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -8,24 +8,36 @@ import {
   ActivityIndicator,
   Modal,
   TextInput,
+  ScrollView,
+  Linking,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { createCheckInFromScan } from '../services/CheckInService';
+import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { auth, db } from '../lib/firebase';
+import i18n from '../locales/i18n';
+import { createCheckInFromScan, type CreateCheckInOptions } from '../services/CheckInService';
 import { getCurrentUserRole } from '../services/UserRoleService';
 
 // Try to import expo-camera
 // Silently fallback to manual input if not available (no warnings)
 let CameraView: any = null;
-let CameraType: any = null;
 let useCameraPermissions: any = null;
 let hasCameraModule = false;
 
+const MANUAL_CODE_PLACEHOLDER = 'FC-XXXXXXXXXX or booking code (6-7 chars)';
+const MANUAL_CODE_HINT = 'Enter FC code or short booking code (6-7 chars).';
+
+const deriveShortBookingCode = (bookingId: string) =>
+  String(bookingId || '')
+    .replace(/[^a-zA-Z0-9]/g, '')
+    .toUpperCase()
+    .slice(-7);
+
 try {
   const expoCamera = require('expo-camera');
-  if (expoCamera && expoCamera.CameraView && expoCamera.CameraType && expoCamera.useCameraPermissions) {
+  if (expoCamera && expoCamera.CameraView && expoCamera.useCameraPermissions) {
     CameraView = expoCamera.CameraView;
-    CameraType = expoCamera.CameraType;
     useCameraPermissions = expoCamera.useCameraPermissions;
     hasCameraModule = true;
   } else {
@@ -44,7 +56,7 @@ function ManualCheckInScreen({ onCheckIn, processing }: { onCheckIn: (code: stri
 
   const handleSubmit = () => {
     if (!manualCode.trim()) {
-      Alert.alert('Error', 'Please enter a check-in code');
+      Alert.alert(i18n.t('error') || 'Error', i18n.t('manualCheckInHint') || MANUAL_CODE_HINT);
       return;
     }
     onCheckIn(manualCode.trim());
@@ -56,18 +68,18 @@ function ManualCheckInScreen({ onCheckIn, processing }: { onCheckIn: (code: stri
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
           <Ionicons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Check-in</Text>
+        <Text style={styles.headerTitle}>{i18n.t('checkIn') || 'Check-in'}</Text>
         <View style={{ width: 40 }} />
       </View>
       <View style={styles.manualInputContainer}>
         <Ionicons name="qr-code-outline" size={64} color="#fff" />
-        <Text style={styles.manualInputTitle}>Enter Check-in Code</Text>
+        <Text style={styles.manualInputTitle}>{i18n.t('enterCheckInCode') || 'Enter Check-in Code'}</Text>
         <Text style={styles.manualInputText}>
-          Enter the check-in code manually (e.g., FC-XXXXXXXXXX)
+          {i18n.t('manualCheckInHint') || MANUAL_CODE_HINT}
         </Text>
         <TextInput
           style={styles.codeInput}
-          placeholder="FC-XXXXXXXXXX"
+          placeholder={MANUAL_CODE_PLACEHOLDER}
           placeholderTextColor="#999"
           value={manualCode}
           onChangeText={setManualCode}
@@ -83,12 +95,9 @@ function ManualCheckInScreen({ onCheckIn, processing }: { onCheckIn: (code: stri
           {processing ? (
             <ActivityIndicator color="#fff" />
           ) : (
-            <Text style={styles.submitButtonText}>Check In</Text>
+            <Text style={styles.submitButtonText}>{i18n.t('checkIn') || 'Check-in'}</Text>
           )}
         </TouchableOpacity>
-        <Text style={styles.installNote}>
-          Install expo-camera for QR code scanning:{'\n'}npx expo install expo-camera
-        </Text>
       </View>
     </View>
   );
@@ -103,6 +112,8 @@ function CameraScannerScreen({ onCheckIn, processing }: { onCheckIn: (code: stri
   const [manualCode, setManualCode] = useState('');
   const [cameraReady, setCameraReady] = useState(false);
   const [useFallback, setUseFallback] = useState(false);
+  const scanLockRef = useRef(false);
+  const lastScanRef = useRef<{ data: string; timestamp: number }>({ data: '', timestamp: 0 });
   
   // Always call the hook - this component should only render when module is available
   // eslint-disable-next-line react-hooks/rules-of-hooks
@@ -110,7 +121,7 @@ function CameraScannerScreen({ onCheckIn, processing }: { onCheckIn: (code: stri
 
   useEffect(() => {
     // Check if camera components are valid and set ready immediately
-    if (CameraView && CameraType) {
+    if (CameraView) {
       setCameraReady(true);
     } else {
       // If components aren't available, use fallback after short delay
@@ -121,37 +132,47 @@ function CameraScannerScreen({ onCheckIn, processing }: { onCheckIn: (code: stri
     }
   }, []);
 
+  const resetScanner = () => {
+    scanLockRef.current = false;
+    setScanned(false);
+  };
+
   const handleBarCodeScanned = async ({ data }: { data: string }) => {
-    if (scanned || processing) return;
-    
+    if (scanLockRef.current || scanned || processing) return;
+
+    const normalizedData = String(data || '').trim();
+    const now = Date.now();
+    if (
+      lastScanRef.current.data === normalizedData &&
+      now - lastScanRef.current.timestamp < 2500
+    ) {
+      return;
+    }
+
+    lastScanRef.current = { data: normalizedData, timestamp: now };
+    scanLockRef.current = true;
     setScanned(true);
 
     try {
-      if (!data.startsWith('forsa_checkin:')) {
+      if (!normalizedData.startsWith('forsa_checkin:') && !normalizedData.startsWith('forsa_checkin_booking:')) {
         Alert.alert(
-          'Invalid QR Code',
-          'This QR code is not a valid check-in code.',
-          [{ text: 'OK', onPress: () => setScanned(false) }]
+          i18n.t('invalidQrCode') || 'Invalid QR Code',
+          i18n.t('invalidCheckInQr') || 'This QR code is not a valid check-in code.',
+          [{ text: i18n.t('ok') || 'OK', onPress: resetScanner }]
         );
         return;
       }
 
-      const code = data.replace('forsa_checkin:', '');
-      if (!code || code.length < 5) {
-        throw new Error('Invalid check-in code format');
-      }
-
-      await onCheckIn(code);
-      setScanned(false);
+      await onCheckIn(normalizedData);
     } catch (error: any) {
-      Alert.alert('Check-in Failed', error.message || 'Failed to process check-in.');
-      setScanned(false);
+      Alert.alert(i18n.t('checkInFailed') || 'Check-in Failed', error.message || (i18n.t('checkInFailedTryAgain') || 'Failed to process check-in. Please try again.'));
+      resetScanner();
     }
   };
 
   const handleManualSubmit = () => {
     if (!manualCode.trim()) {
-      Alert.alert('Error', 'Please enter a check-in code');
+      Alert.alert(i18n.t('error') || 'Error', i18n.t('manualCheckInHint') || MANUAL_CODE_HINT);
       return;
     }
     setShowManualInput(false);
@@ -160,7 +181,7 @@ function CameraScannerScreen({ onCheckIn, processing }: { onCheckIn: (code: stri
   };
 
   // Check if camera components are available and ready
-  const isCameraAvailable = !useFallback && cameraReady && CameraView && CameraType;
+  const isCameraAvailable = !useFallback && cameraReady && !!CameraView;
   
   // If fallback is needed, show manual input
   if (useFallback) {
@@ -170,18 +191,18 @@ function CameraScannerScreen({ onCheckIn, processing }: { onCheckIn: (code: stri
           <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color="#fff" />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Check-in</Text>
+          <Text style={styles.headerTitle}>{i18n.t('checkIn') || 'Check-in'}</Text>
           <View style={{ width: 40 }} />
         </View>
         <View style={styles.manualInputContainer}>
           <Ionicons name="qr-code-outline" size={64} color="#fff" />
-          <Text style={styles.manualInputTitle}>Enter Check-in Code</Text>
+          <Text style={styles.manualInputTitle}>{i18n.t('enterCheckInCode') || 'Enter Check-in Code'}</Text>
           <Text style={styles.manualInputText}>
-            Camera unavailable. Enter the check-in code manually (e.g., FC-XXXXXXXXXX)
+            {i18n.t('cameraUnavailableManual') || 'Camera unavailable. You can still enter the check-in code manually.'}
           </Text>
           <TextInput
             style={styles.codeInput}
-            placeholder="FC-XXXXXXXXXX"
+            placeholder={MANUAL_CODE_PLACEHOLDER}
             placeholderTextColor="#999"
             value={manualCode}
             onChangeText={setManualCode}
@@ -197,7 +218,7 @@ function CameraScannerScreen({ onCheckIn, processing }: { onCheckIn: (code: stri
             {processing ? (
               <ActivityIndicator color="#fff" />
             ) : (
-              <Text style={styles.submitButtonText}>Check In</Text>
+              <Text style={styles.submitButtonText}>{i18n.t('checkIn') || 'Check-in'}</Text>
             )}
           </TouchableOpacity>
         </View>
@@ -213,18 +234,18 @@ function CameraScannerScreen({ onCheckIn, processing }: { onCheckIn: (code: stri
           <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color="#fff" />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Check-in</Text>
+          <Text style={styles.headerTitle}>{i18n.t('checkIn') || 'Check-in'}</Text>
           <View style={{ width: 40 }} />
         </View>
         <View style={styles.manualInputContainer}>
           <Ionicons name="qr-code-outline" size={64} color="#fff" />
-          <Text style={styles.manualInputTitle}>Enter Check-in Code</Text>
+          <Text style={styles.manualInputTitle}>{i18n.t('enterCheckInCode') || 'Enter Check-in Code'}</Text>
           <Text style={styles.manualInputText}>
-            Camera not available. Enter the check-in code manually (e.g., FC-XXXXXXXXXX)
+            {i18n.t('cameraUnavailableManual') || 'Camera unavailable. You can still enter the check-in code manually.'}
           </Text>
           <TextInput
             style={styles.codeInput}
-            placeholder="FC-XXXXXXXXXX"
+            placeholder={MANUAL_CODE_PLACEHOLDER}
             placeholderTextColor="#999"
             value={manualCode}
             onChangeText={setManualCode}
@@ -240,7 +261,7 @@ function CameraScannerScreen({ onCheckIn, processing }: { onCheckIn: (code: stri
             {processing ? (
               <ActivityIndicator color="#fff" />
             ) : (
-              <Text style={styles.submitButtonText}>Check In</Text>
+              <Text style={styles.submitButtonText}>{i18n.t('checkIn') || 'Check-in'}</Text>
             )}
           </TouchableOpacity>
         </View>
@@ -255,49 +276,55 @@ function CameraScannerScreen({ onCheckIn, processing }: { onCheckIn: (code: stri
           <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color="#fff" />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Scan Check-in</Text>
+          <Text style={styles.headerTitle}>{i18n.t('scanCheckIn') || 'Scan Check-in'}</Text>
           <View style={{ width: 40 }} />
         </View>
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#fff" />
-          <Text style={styles.loadingText}>Checking camera permissions...</Text>
+          <Text style={styles.loadingText}>{i18n.t('checkingPermissions') || 'Checking permissions...'}</Text>
         </View>
       </View>
     );
   }
 
   if (!permission.granted) {
+    const canAskAgain = permission.canAskAgain !== false;
+
     return (
       <View style={styles.container}>
         <View style={styles.header}>
           <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color="#fff" />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Scan Check-in</Text>
+          <Text style={styles.headerTitle}>{i18n.t('scanCheckIn') || 'Scan Check-in'}</Text>
           <View style={{ width: 40 }} />
         </View>
         <View style={styles.permissionContainer}>
           <Ionicons name="camera-outline" size={64} color="#fff" />
-          <Text style={styles.permissionTitle}>Camera Permission Required</Text>
+          <Text style={styles.permissionTitle}>{i18n.t('cameraAccessNeeded') || 'Camera access needed'}</Text>
           <Text style={styles.permissionText}>
-            We need access to your camera to scan QR codes for check-ins.
+            {i18n.t('cameraCheckInHelp') || 'Allow camera access to scan QR codes for check-ins, or enter the code manually below.'}
           </Text>
           <TouchableOpacity
             style={styles.permissionButton}
             onPress={async () => {
-              if (requestPermission) {
-                const result = await requestPermission();
-                // Permission state will update via the hook
+              if (canAskAgain && requestPermission) {
+                await requestPermission();
+                return;
               }
+
+              await Linking.openSettings();
             }}
           >
-            <Text style={styles.permissionButtonText}>Grant Permission</Text>
+            <Text style={styles.permissionButtonText}>
+              {canAskAgain ? (i18n.t('allowCameraAccess') || 'Allow Camera Access') : (i18n.t('openSettings') || 'Open Settings')}
+            </Text>
           </TouchableOpacity>
           <View style={styles.manualFallback}>
-            <Text style={styles.manualFallbackText}>Or enter code manually:</Text>
+            <Text style={styles.manualFallbackText}>{i18n.t('enterCodeManually') || 'Enter Code Manually'}:</Text>
             <TextInput
               style={styles.codeInputSmall}
-              placeholder="FC-XXXXXXXXXX"
+              placeholder={MANUAL_CODE_PLACEHOLDER}
               placeholderTextColor="#999"
               value={manualCode}
               onChangeText={setManualCode}
@@ -309,7 +336,7 @@ function CameraScannerScreen({ onCheckIn, processing }: { onCheckIn: (code: stri
               style={[styles.submitButtonSmall, (processing || !manualCode.trim()) && styles.submitButtonDisabled]}
               onPress={() => {
                 if (!manualCode.trim()) {
-                  Alert.alert('Error', 'Please enter a check-in code');
+                  Alert.alert(i18n.t('error') || 'Error', i18n.t('manualCheckInHint') || MANUAL_CODE_HINT);
                   return;
                 }
                 setShowManualInput(false);
@@ -321,7 +348,7 @@ function CameraScannerScreen({ onCheckIn, processing }: { onCheckIn: (code: stri
               {processing ? (
                 <ActivityIndicator color="#fff" size="small" />
               ) : (
-                <Text style={styles.submitButtonTextSmall}>Check In</Text>
+                <Text style={styles.submitButtonTextSmall}>{i18n.t('checkIn') || 'Check-in'}</Text>
               )}
             </TouchableOpacity>
           </View>
@@ -336,14 +363,14 @@ function CameraScannerScreen({ onCheckIn, processing }: { onCheckIn: (code: stri
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
           <Ionicons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Scan Check-in</Text>
+        <Text style={styles.headerTitle}>{i18n.t('scanCheckIn') || 'Scan Check-in'}</Text>
         <View style={{ width: 40 }} />
       </View>
 
       {isCameraAvailable && permission?.granted ? (
         <CameraView
           style={styles.camera}
-          facing={CameraType.back}
+          facing="back"
           onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
           barcodeScannerSettings={{
             barcodeTypes: ['qr'],
@@ -357,7 +384,7 @@ function CameraScannerScreen({ onCheckIn, processing }: { onCheckIn: (code: stri
               <View style={[styles.corner, styles.bottomRight]} />
             </View>
             <Text style={styles.instructionText}>
-              Position the QR code within the frame
+              {i18n.t('positionQrWithinFrame') || 'Position the QR code within the frame'}
             </Text>
           </View>
         </CameraView>
@@ -365,13 +392,13 @@ function CameraScannerScreen({ onCheckIn, processing }: { onCheckIn: (code: stri
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#fff" />
           <Text style={styles.loadingText}>
-            {!permission?.granted ? 'Waiting for camera permission...' : 'Camera not available'}
+            {!permission?.granted ? (i18n.t('cameraWaiting') || 'Waiting for camera access...') : (i18n.t('cameraUnavailableManual') || 'Camera unavailable. You can still enter the check-in code manually.')}
           </Text>
           <TouchableOpacity
             style={styles.fallbackButton}
             onPress={() => setShowManualInput(true)}
           >
-            <Text style={styles.fallbackButtonText}>Enter Code Manually</Text>
+            <Text style={styles.fallbackButtonText}>{i18n.t('enterCodeManually') || 'Enter Code Manually'}</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -381,8 +408,15 @@ function CameraScannerScreen({ onCheckIn, processing }: { onCheckIn: (code: stri
         onPress={() => setShowManualInput(true)}
       >
         <Ionicons name="keypad-outline" size={20} color="#fff" />
-        <Text style={styles.manualInputButtonText}>Enter Code Manually</Text>
+        <Text style={styles.manualInputButtonText}>{i18n.t('enterCodeManually') || 'Enter Code Manually'}</Text>
       </TouchableOpacity>
+
+      {scanned && !processing && (
+        <TouchableOpacity style={styles.scanOnceButton} onPress={resetScanner}>
+          <Ionicons name="scan" size={20} color="#fff" />
+          <Text style={styles.scanOnceButtonText}>{i18n.t('scanAgain') || 'Scan Next QR'}</Text>
+        </TouchableOpacity>
+      )}
 
       {/* Manual Input Modal */}
       <Modal
@@ -394,7 +428,7 @@ function CameraScannerScreen({ onCheckIn, processing }: { onCheckIn: (code: stri
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Enter Check-in Code</Text>
+              <Text style={styles.modalTitle}>{i18n.t('enterCheckInCode') || 'Enter Check-in Code'}</Text>
               <TouchableOpacity
                 onPress={() => {
                   setShowManualInput(false);
@@ -406,11 +440,11 @@ function CameraScannerScreen({ onCheckIn, processing }: { onCheckIn: (code: stri
               </TouchableOpacity>
             </View>
             <Text style={styles.modalSubtitle}>
-              Enter the check-in code manually (e.g., FC-XXXXXXXXXX)
+              {i18n.t('manualCheckInHint') || MANUAL_CODE_HINT}
             </Text>
             <TextInput
               style={styles.modalInput}
-              placeholder="FC-XXXXXXXXXX"
+              placeholder={MANUAL_CODE_PLACEHOLDER}
               placeholderTextColor="#999"
               value={manualCode}
               onChangeText={setManualCode}
@@ -427,7 +461,7 @@ function CameraScannerScreen({ onCheckIn, processing }: { onCheckIn: (code: stri
               {processing ? (
                 <ActivityIndicator color="#fff" />
               ) : (
-                <Text style={styles.modalSubmitButtonText}>Check In</Text>
+                <Text style={styles.modalSubmitButtonText}>{i18n.t('checkIn') || 'Check-in'}</Text>
               )}
             </TouchableOpacity>
           </View>
@@ -437,14 +471,95 @@ function CameraScannerScreen({ onCheckIn, processing }: { onCheckIn: (code: stri
   );
 }
 
+type ProviderService = { name: string; price: number };
+
 export default function ScanCheckInScreen() {
   const router = useRouter();
   const [processing, setProcessing] = useState(false);
   const [userRole, setUserRole] = useState<string | null>(null);
+  const [walkInModalVisible, setWalkInModalVisible] = useState(false);
+  const [pendingCode, setPendingCode] = useState<string | null>(null);
+  const [pendingBookingId, setPendingBookingId] = useState<string | null>(null);
+  const [walkInCustomerType, setWalkInCustomerType] = useState('walk_in');
+  const [providerServices, setProviderServices] = useState<ProviderService[]>([]);
+  const [adminCommissionRate, setAdminCommissionRate] = useState(15);
+  const [selectedService, setSelectedService] = useState<ProviderService | null>(null);
+  const [servicesLoading, setServicesLoading] = useState(false);
 
   useEffect(() => {
     checkUserRole();
   }, []);
+
+  const loadProviderServicesAndCommission = async (role: string) => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+    setServicesLoading(true);
+    try {
+      const services: ProviderService[] = [];
+
+      if (role === 'clinic') {
+        const clinicSnap = await getDoc(doc(db, 'clinics', uid));
+        if (clinicSnap.exists()) {
+          const data = clinicSnap.data();
+          // Predefined clinic services
+          if (data.services) {
+            Object.entries(data.services).forEach(([key, val]: [string, any]) => {
+              if (val?.selected && val?.fee) {
+                services.push({ name: key.replace(/_/g, ' '), price: parseFloat(val.fee) || 0 });
+              }
+            });
+          }
+          // Custom clinic services
+          if (Array.isArray(data.customServices)) {
+            data.customServices.forEach((s: any) => {
+              if (s?.name && s?.price) {
+                services.push({ name: s.name, price: parseFloat(s.price) || 0 });
+              }
+            });
+          }
+        }
+      } else if (role === 'academy') {
+        // Age-group pricing from users/{uid}.fees or .prices
+        const userSnap = await getDoc(doc(db, 'users', uid));
+        if (userSnap.exists()) {
+          const data = userSnap.data();
+          const fees: Record<string, any> = data.fees || data.prices || {};
+          Object.entries(fees).forEach(([age, price]) => {
+            const p = parseFloat(String(price)) || 0;
+            if (p > 0) services.push({ name: `U${age} Training`, price: p });
+          });
+        }
+        // Private training programs
+        const programsSnap = await getDocs(
+          query(collection(db, 'academy_programs'), where('academyId', '==', uid), where('isActive', '==', true))
+        );
+        programsSnap.docs.forEach((d) => {
+          const pd = d.data();
+          if (pd.fee > 0) {
+            services.push({ name: pd.name || `Private Training (${pd.coachName || ''})`, price: pd.fee });
+          }
+        });
+      }
+
+      setProviderServices(services);
+
+      // Load admin commission rate
+      const settingsSnap = await getDoc(doc(db, 'settings', 'admin'));
+      if (settingsSnap.exists()) {
+        const raw = settingsSnap.data();
+        const rate =
+          raw?.checkInCommission?.value ??
+          raw?.bookingCommission?.value ??
+          raw?.commissionRate ??
+          15;
+        setAdminCommissionRate(Number(rate) || 15);
+      }
+    } catch (err) {
+      console.warn('Failed to load provider services:', err);
+    } finally {
+      setServicesLoading(false);
+    }
+  };
 
   const checkUserRole = async () => {
     try {
@@ -453,49 +568,138 @@ export default function ScanCheckInScreen() {
       
       if (role !== 'academy' && role !== 'clinic') {
         Alert.alert(
-          'Access Denied',
-          'Only academy and clinic staff can scan check-in codes.',
-          [{ text: 'OK', onPress: () => router.back() }]
+          i18n.t('accessDenied') || 'Access Denied',
+          i18n.t('onlyAcademyClinicCanScan') || 'Only academy and clinic staff can scan check-in codes.',
+          [{ text: i18n.t('ok') || 'OK', onPress: () => router.back() }]
         );
+      } else {
+        loadProviderServicesAndCommission(role);
       }
     } catch (error) {
       console.error('Error checking user role:', error);
-      Alert.alert('Error', 'Failed to verify permissions');
+      Alert.alert(i18n.t('error') || 'Error', i18n.t('failedVerifyPermissions') || 'Failed to verify permissions');
       router.back();
     }
   };
 
-  const processCheckInCode = async (code: string) => {
+  const parseScannedPayload = (value: string) => {
+    const trimmed = value.trim();
+
+    if (trimmed.startsWith('forsa_checkin_booking:')) {
+      const pieces = trimmed.split(':');
+      const bookingId = pieces[1] || '';
+      const bookingCode = pieces.slice(2).join(':');
+      return { cleanCode: bookingCode, bookingId: bookingId || null };
+    }
+
+    if (trimmed.startsWith('forsa_checkin:')) {
+      return { cleanCode: trimmed.replace('forsa_checkin:', ''), bookingId: null };
+    }
+
+    return { cleanCode: trimmed, bookingId: null };
+  };
+
+  const resolveShortBookingManualCode = async (typedCode: string) => {
+    const staffId = auth.currentUser?.uid;
+    if (!staffId) return null;
+
+    const normalized = typedCode.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+    if (!/^[A-Z0-9]{6,7}$/.test(normalized)) {
+      return null;
+    }
+
+    const bookingsSnap = await getDocs(query(collection(db, 'bookings'), where('providerId', '==', staffId)));
+    const candidates = bookingsSnap.docs
+      .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() } as any))
+      .filter((booking) => {
+        const status = String(booking.status || '').toLowerCase();
+        const allowed = ['pending', 'confirmed', 'new_time_proposed', 'timing_proposed', 'player_accepted'];
+        const notCheckedIn = !booking.checkedInAt && !booking.lastCheckInId && String(booking.attendanceStatus || '').toLowerCase() !== 'checked_in';
+        return allowed.includes(status) && notCheckedIn;
+      })
+      .sort((a, b) => {
+        const aTime = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
+        const bTime = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
+        return bTime - aTime;
+      });
+
+    const matchedBooking = candidates.find((booking) => deriveShortBookingCode(booking.id) === normalized);
+    if (!matchedBooking) {
+      throw new Error('Invalid booking manual code. Please verify the 6-7 character code.');
+    }
+
+    const customerId = matchedBooking.playerId || matchedBooking.parentId || matchedBooking.userId || matchedBooking.academyId;
+    if (!customerId) {
+      throw new Error('Booking is missing customer info.');
+    }
+
+    const customerSnap = await getDoc(doc(db, 'users', customerId));
+    if (!customerSnap.exists()) {
+      throw new Error('Customer not found for this booking.');
+    }
+
+    const customerCode = String((customerSnap.data() as any)?.checkInCode || '').trim();
+    if (!customerCode || !customerCode.startsWith('FC-')) {
+      throw new Error('Customer check-in code is missing for this booking.');
+    }
+
+    return {
+      linkedBookingId: matchedBooking.id,
+      cleanCode: customerCode,
+    };
+  };
+
+  const processCheckInCode = async (code: string, options?: CreateCheckInOptions) => {
     if (processing) return;
-    
+
+    const parsed = parseScannedPayload(code);
+    let cleanCode = parsed.cleanCode;
+    let linkedBookingId = options?.linkedBookingId || parsed.bookingId || null;
+
+    if (!linkedBookingId && !cleanCode.startsWith('FC-')) {
+      const resolved = await resolveShortBookingManualCode(String(code || ''));
+      if (resolved) {
+        cleanCode = resolved.cleanCode;
+        linkedBookingId = resolved.linkedBookingId;
+      }
+    }
+
+    // Personal code scan (no bookingId embedded in QR): always go straight to the
+    // walk-in service modal. The academy/clinic must clarify what service was provided.
+    // Do NOT attempt to auto-link a booking — personal codes are reusable across visits.
+    if (!linkedBookingId && !options?.walkInService) {
+      setPendingCode(cleanCode);
+      setPendingBookingId(null);
+      setWalkInModalVisible(true);
+      return;
+    }
+  
     setProcessing(true);
 
     try {
-      // Handle both formats: "forsa_checkin:FC-XXXXXXXXXX" or just "FC-XXXXXXXXXX"
-      let cleanCode = code.trim();
-      
-      // Remove "forsa_checkin:" prefix if present
-      if (cleanCode.startsWith('forsa_checkin:')) {
-        cleanCode = cleanCode.replace('forsa_checkin:', '');
-      }
-      
-      // Validate code format (should be FC-XXXXXXXXXX)
       if (!cleanCode || cleanCode.length < 5 || !cleanCode.startsWith('FC-')) {
-        throw new Error('Invalid check-in code format. Code should start with "FC-" (e.g., FC-XXXXXXXXXX)');
+        throw new Error(i18n.t('invalidCheckInFormat') || 'Invalid check-in code format. Use a code that starts with "FC-".');
       }
 
-      // Create check-in - this will track the record in Firestore
-      const checkIn = await createCheckInFromScan(cleanCode);
-      
-      // Get user name for success message
+      const nextOptions: CreateCheckInOptions = {
+        ...(options || {}),
+        linkedBookingId,
+      };
+
+      const checkIn = await createCheckInFromScan(cleanCode, nextOptions);
       const userName = checkIn.userName || 'User';
-      
+      const isBookingScan = Boolean(linkedBookingId);
+
       Alert.alert(
-        'Check-in Successful',
-        `${userName} has been checked in successfully.`,
+        isBookingScan
+          ? (i18n.t('bookingCompletedTitle') || 'Booking Completed')
+          : (i18n.t('checkInSuccessful') || 'Check-in Successful'),
+        isBookingScan
+          ? (i18n.t('bookingCompletedMessage', { name: userName }) || `${userName}'s booking is completed and locked.`)
+          : (i18n.t('checkInSuccessMessage', { name: userName }) || `${userName} has been checked in successfully.`),
         [
           {
-            text: 'OK',
+            text: i18n.t('ok') || 'OK',
             onPress: () => {
               setProcessing(false);
             },
@@ -503,13 +707,22 @@ export default function ScanCheckInScreen() {
         ]
       );
     } catch (error: any) {
+      if (error?.code === 'service-details-required') {
+        const parsed = parseScannedPayload(code);
+        setPendingCode(parsed.cleanCode);
+        setPendingBookingId(parsed.bookingId || null);
+        setWalkInModalVisible(true);
+        setProcessing(false);
+        return;
+      }
+
       console.error('Error processing check-in:', error);
       Alert.alert(
-        'Check-in Failed',
-        error.message || 'Failed to process check-in. Please try again.',
+        i18n.t('checkInFailed') || 'Check-in Failed',
+        error.message || (i18n.t('checkInFailedTryAgain') || 'Failed to process check-in. Please try again.'),
         [
           {
-            text: 'OK',
+            text: i18n.t('ok') || 'OK',
             onPress: () => {
               setProcessing(false);
             },
@@ -517,6 +730,31 @@ export default function ScanCheckInScreen() {
         ]
       );
     }
+  };
+
+  const submitWalkInService = async () => {
+    if (!pendingCode) return;
+
+    if (!selectedService) {
+      Alert.alert('Select a Service', 'Please choose the service that was provided.');
+      return;
+    }
+
+    setWalkInModalVisible(false);
+    await processCheckInCode(pendingCode, {
+      linkedBookingId: pendingBookingId,
+      walkInService: {
+        serviceName: selectedService.name,
+        grossAmount: selectedService.price,
+        commissionPercentage: adminCommissionRate,
+      },
+      walkInCustomerType: walkInCustomerType.trim() || 'walk_in',
+    });
+
+    setPendingCode(null);
+    setPendingBookingId(null);
+    setSelectedService(null);
+    setWalkInCustomerType('walk_in');
   };
 
   if (userRole && userRole !== 'academy' && userRole !== 'clinic') {
@@ -526,14 +764,14 @@ export default function ScanCheckInScreen() {
           <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color="#fff" />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Scan Check-in</Text>
+          <Text style={styles.headerTitle}>{i18n.t('scanCheckIn') || 'Scan Check-in'}</Text>
           <View style={{ width: 40 }} />
         </View>
         <View style={styles.errorContainer}>
           <Ionicons name="lock-closed-outline" size={64} color="#fff" />
-          <Text style={styles.errorText}>Access Denied</Text>
+          <Text style={styles.errorText}>{i18n.t('accessDenied') || 'Access Denied'}</Text>
           <Text style={styles.errorSubtext}>
-            Only academy and clinic staff can scan check-in codes.
+            {i18n.t('onlyAcademyClinicCanScan') || 'Only academy and clinic staff can scan check-in codes.'}
           </Text>
         </View>
       </View>
@@ -542,7 +780,7 @@ export default function ScanCheckInScreen() {
 
   // Show manual input if camera module is not available, otherwise show camera scanner
   // Check if all required camera components are available
-  const canUseCamera = hasCameraModule && CameraView && CameraType && useCameraPermissions;
+  const canUseCamera = hasCameraModule && !!CameraView && !!useCameraPermissions;
   
   if (!canUseCamera) {
     return <ManualCheckInScreen onCheckIn={processCheckInCode} processing={processing} />;
@@ -551,12 +789,88 @@ export default function ScanCheckInScreen() {
   return (
     <>
       <CameraScannerScreen onCheckIn={processCheckInCode} processing={processing} />
+
+      <Modal
+        transparent
+        visible={walkInModalVisible}
+        animationType="slide"
+        onRequestClose={() => setWalkInModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Service Details Required</Text>
+            <Text style={styles.modalSubtitle}>
+              Select the service provided. Commission ({adminCommissionRate}%) is applied automatically.
+            </Text>
+
+            {servicesLoading ? (
+              <ActivityIndicator color="#007AFF" style={{ marginVertical: 16 }} />
+            ) : providerServices.length === 0 ? (
+              <Text style={{ color: '#999', textAlign: 'center', marginVertical: 12 }}>
+                No services found. Please add services to your profile first.
+              </Text>
+            ) : (
+              <ScrollView style={{ maxHeight: 200 }} showsVerticalScrollIndicator={false}>
+                {providerServices.map((svc, idx) => {
+                  const isSelected = selectedService?.name === svc.name;
+                  return (
+                    <TouchableOpacity
+                      key={idx}
+                      style={[
+                        styles.servicePickerRow,
+                        isSelected && styles.servicePickerRowSelected,
+                      ]}
+                      onPress={() => setSelectedService(svc)}
+                    >
+                      <Text style={[styles.servicePickerName, isSelected && { color: '#fff' }]}>
+                        {svc.name}
+                      </Text>
+                      <Text style={[styles.servicePickerPrice, isSelected && { color: '#cef' }]}>
+                        {svc.price} EGP
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            )}
+
+            <TextInput
+              style={[styles.modalInput, { marginTop: 12 }]}
+              placeholder="Customer type (walk_in / parent / player)"
+              placeholderTextColor="#999"
+              value={walkInCustomerType}
+              onChangeText={setWalkInCustomerType}
+              autoCapitalize="none"
+            />
+
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 6 }}>
+              <TouchableOpacity
+                style={[styles.modalSubmitButton, { backgroundColor: '#64748b', flex: 1 }]}
+                onPress={() => {
+                  setWalkInModalVisible(false);
+                  setPendingCode(null);
+                  setPendingBookingId(null);
+                }}
+              >
+                <Text style={styles.modalSubmitButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalSubmitButton, { flex: 1 }]}
+                onPress={submitWalkInService}
+              >
+                <Text style={styles.modalSubmitButtonText}>Submit</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {processing && (
         <Modal transparent visible={processing} animationType="fade">
           <View style={styles.processingOverlay}>
             <View style={styles.processingBox}>
               <ActivityIndicator size="large" color="#007AFF" />
-              <Text style={styles.processingText}>Processing check-in...</Text>
+              <Text style={styles.processingText}>{i18n.t('processingCheckIn') || 'Processing check-in...'}</Text>
             </View>
           </View>
         </Modal>
@@ -839,6 +1153,24 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
+  scanOnceButton: {
+    position: 'absolute',
+    bottom: 95,
+    left: 20,
+    right: 20,
+    backgroundColor: '#16a34a',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    borderRadius: 12,
+    gap: 8,
+  },
+  scanOnceButtonText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '700',
+  },
   fallbackButton: {
     marginTop: 20,
     paddingVertical: 12,
@@ -910,5 +1242,32 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
+  },
+  servicePickerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#d0d0d0',
+    marginBottom: 6,
+    backgroundColor: '#f9f9f9',
+  },
+  servicePickerRowSelected: {
+    backgroundColor: '#007AFF',
+    borderColor: '#005BB5',
+  },
+  servicePickerName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#222',
+    flex: 1,
+  },
+  servicePickerPrice: {
+    fontSize: 14,
+    color: '#555',
+    marginLeft: 8,
   },
 });

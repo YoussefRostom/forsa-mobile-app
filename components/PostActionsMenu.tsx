@@ -73,6 +73,12 @@ export default function PostActionsMenu({
 
   const handleDelete = () => {
     setShowActionSheet(false);
+
+    if (!isOwner) {
+      Alert.alert(i18n.t('error') || 'Error', i18n.t('cannotDeleteOtherUsersPost') || 'You cannot delete another user\'s post.');
+      return;
+    }
+
     Alert.alert(
       i18n.t('deletePost') || 'Delete Post',
       i18n.t('deletePostConfirm') || 'Are you sure you want to delete this post?',

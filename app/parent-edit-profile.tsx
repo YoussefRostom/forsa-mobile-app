@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import React, { useRef, useState, useEffect } from 'react';
-import { Alert, Animated, Easing, FlatList, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, ActivityIndicator } from 'react-native';
+import { Alert, Animated, Easing, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, ActivityIndicator } from 'react-native';
 import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import i18n from '../locales/i18n';
@@ -212,22 +212,41 @@ export default function ParentEditProfileScreen() {
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
           >
-            <View style={styles.formCard}>
-              {/* Profile Photo */}
-              <View style={styles.profileSection}>
-                <TouchableOpacity onPress={handlePickPhoto} style={styles.profileImageContainer}>
-                  {profilePhoto ? (
-                    <Image source={{ uri: profilePhoto }} style={styles.profileImage} />
-                  ) : (
-                    <View style={styles.profileImagePlaceholder}>
-                      <Ionicons name="camera" size={32} color="#999" />
-                    </View>
-                  )}
-                  <View style={styles.profileImageOverlay}>
-                    <Ionicons name="camera" size={20} color="#fff" />
+            <View style={styles.heroCard}>
+              <TouchableOpacity onPress={handlePickPhoto} style={styles.profileImageContainer}>
+                {profilePhoto ? (
+                  <Image source={{ uri: profilePhoto }} style={styles.profileImage} />
+                ) : (
+                  <View style={styles.profileImagePlaceholder}>
+                    <Ionicons name="camera" size={32} color="#9ca3af" />
                   </View>
+                )}
+                <View style={styles.profileImageOverlay}>
+                  <Ionicons name="camera" size={18} color="#fff" />
+                </View>
+              </TouchableOpacity>
+
+              <View style={styles.heroTextWrap}>
+                <Text style={styles.heroName} numberOfLines={1}>{name?.trim() || (i18n.t('parent') || 'Parent')}</Text>
+                <Text style={styles.heroSub}>{i18n.t('updateYourInformation') || 'Update your information'}</Text>
+              </View>
+
+              <View style={styles.heroMetaRow}>
+                <View style={styles.heroChip}>
+                  <Ionicons name="people-outline" size={14} color="#111827" />
+                  <Text style={styles.heroChipText}>{children.length} {(i18n.t('children') || 'Children')}</Text>
+                </View>
+                <TouchableOpacity style={styles.heroGhostBtn} onPress={handlePickPhoto}>
+                  <Ionicons name="image-outline" size={14} color="#111827" />
+                  <Text style={styles.heroGhostBtnText}>{i18n.t('upload') || 'Upload'}</Text>
                 </TouchableOpacity>
-                <Text style={styles.profileLabel}>{i18n.t('uploadProfilePic') || 'Upload Profile Picture'}</Text>
+              </View>
+            </View>
+
+            <View style={styles.sectionCard}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>{i18n.t('personalInformation') || 'Personal Information'}</Text>
+                <Text style={styles.sectionHint}>{i18n.t('requiredField') || 'Keep these details up to date.'}</Text>
               </View>
 
               <View style={styles.inputGroup}>
@@ -260,22 +279,31 @@ export default function ParentEditProfileScreen() {
                 </View>
               </View>
 
-              <View style={styles.inputGroup}>
+              <View style={[styles.inputGroup, styles.inputGroupNoMargin]}>
                 <Text style={styles.label}>{i18n.t('phone')}</Text>
-                <View style={styles.inputWrapper}>
-                  <Ionicons name="call-outline" size={20} color="#999" style={styles.inputIcon} />
+                <View style={[styles.inputWrapper, styles.disabledInputWrapper]}>
+                  <Ionicons name="call-outline" size={20} color="#bbb" style={styles.inputIcon} />
                   <TextInput
-                    style={styles.input}
+                    style={[styles.input, styles.disabledInput]}
                     value={phone}
                     onChangeText={setPhone}
                     placeholder={i18n.t('phone_ph')}
-                    placeholderTextColor="#999"
+                    placeholderTextColor="#bbb"
                     keyboardType="phone-pad"
+                    editable={false}
                   />
                 </View>
+                <Text style={styles.fieldHint}>{i18n.t('phoneSecurityHint') || 'Phone number is fixed for account security.'}</Text>
+              </View>
+            </View>
+
+            <View style={styles.sectionCard}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>{i18n.t('locationLabel') || 'Location'}</Text>
+                <Text style={styles.sectionHint}>{i18n.t('locationExperienceHint') || 'Help academies and clinics find you faster.'}</Text>
               </View>
 
-              <View style={styles.inputGroup}>
+              <View style={[styles.inputGroup, styles.inputGroupNoMargin]}>
                 <Text style={styles.label}>{i18n.t('city')}</Text>
                 <TouchableOpacity style={styles.inputWrapper} onPress={() => setCityModal(true)}>
                   <Ionicons name="location-outline" size={20} color="#999" style={styles.inputIcon} />
@@ -314,11 +342,34 @@ export default function ParentEditProfileScreen() {
                   </TouchableOpacity>
                 </Modal>
               </View>
-              <View style={styles.inputGroup}>
+            </View>
+
+            <View style={styles.sectionCard}>
+              <View style={styles.sectionHeaderRow}>
+                <View>
+                  <Text style={styles.sectionTitle}>{i18n.t('child_names') || 'Children'}</Text>
+                  <Text style={styles.sectionHint}>{i18n.t('selectAgeToReview') || 'Add your children details for booking.'}</Text>
+                </View>
+                <TouchableOpacity onPress={handleAddChild} style={styles.addChildButton}>
+                  <Ionicons name="add-circle-outline" size={18} color="#111827" />
+                  <Text style={styles.addChildText}> {i18n.t('add_child')}</Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={[styles.inputGroup, styles.inputGroupNoMargin]}>
                 <Text style={styles.label}>{i18n.t('child_names')}</Text>
                 {children.map((child, idx) => (
-                  <View key={idx} style={styles.childRow}>
-                    <View style={[styles.inputWrapper, { flex: 2, marginRight: 8, marginBottom: 0 }]}>
+                  <View key={idx} style={styles.childCard}>
+                    <View style={styles.childCardHeader}>
+                      <Text style={styles.childCardTitle}>{(i18n.t('childName') || 'Child')} {idx + 1}</Text>
+                      {children.length > 1 && (
+                        <TouchableOpacity onPress={() => handleRemoveChild(idx)} style={styles.removeButton}>
+                          <Ionicons name="trash-outline" size={18} color="#ef4444" />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+
+                    <View style={[styles.inputWrapper, styles.childNameInput]}>
                       <Ionicons name="person-outline" size={20} color="#999" style={styles.inputIcon} />
                       <TextInput
                         style={styles.input}
@@ -329,7 +380,8 @@ export default function ParentEditProfileScreen() {
                         placeholderTextColor="#999"
                       />
                     </View>
-                    <View style={[styles.inputWrapper, { flex: 1, marginBottom: 0, minWidth: 100 }]}>
+
+                    <View style={styles.inputWrapper}>
                       <Ionicons name="calendar-outline" size={20} color="#999" style={styles.inputIcon} />
                       <TouchableOpacity
                         style={{ flex: 1, justifyContent: 'center', paddingRight: 8 }}
@@ -366,27 +418,20 @@ export default function ParentEditProfileScreen() {
                         </View>
                       </TouchableOpacity>
                     </Modal>
-                    {children.length > 1 && (
-                      <TouchableOpacity onPress={() => handleRemoveChild(idx)} style={styles.removeButton}>
-                        <Ionicons name="close-circle" size={24} color="#ff3b30" />
-                      </TouchableOpacity>
-                    )}
                   </View>
                 ))}
-                <TouchableOpacity onPress={handleAddChild} style={styles.addChildButton}>
-                  <Ionicons name="add-circle-outline" size={20} color="#000" />
-                  <Text style={styles.addChildText}> {i18n.t('add_child')}</Text>
-                </TouchableOpacity>
               </View>
-
-              <TouchableOpacity style={[styles.saveBtn, saving && styles.saveBtnDisabled]} onPress={handleSave} disabled={saving}>
-                {saving ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <Text style={styles.saveBtnText}>{i18n.t('save')}</Text>
-                )}
-              </TouchableOpacity>
             </View>
+
+            <TouchableOpacity style={[styles.saveBtn, saving && styles.saveBtnDisabled]} onPress={handleSave} disabled={saving}>
+              {saving ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.saveBtnText}>{i18n.t('save')}</Text>
+              )}
+            </TouchableOpacity>
+
+            <Text style={styles.bottomSafeHint}>{i18n.t('secureSignupHint') || 'Your details are stored securely.'}</Text>
           </ScrollView>
         </Animated.View>
       </LinearGradient>
@@ -434,36 +479,125 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   scrollContent: {
-    paddingHorizontal: 24,
-    paddingBottom: 40,
+    paddingHorizontal: 16,
+    paddingBottom: 44,
   },
-  formCard: {
+  heroCard: {
     backgroundColor: '#fff',
-    borderRadius: 24,
-    padding: 24,
-    marginTop: 20,
+    borderRadius: 22,
+    padding: 18,
+    marginTop: 16,
+    marginBottom: 12,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.3,
-    shadowRadius: 20,
-    elevation: 10,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.12,
+    shadowRadius: 14,
+    elevation: 5,
+  },
+  heroTextWrap: {
+    alignItems: 'center',
+    marginTop: 8,
+    marginBottom: 12,
+  },
+  heroName: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#111827',
+  },
+  heroSub: {
+    marginTop: 4,
+    color: '#6b7280',
+    fontSize: 13,
+    textAlign: 'center',
+  },
+  heroMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  heroChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#f3f4f6',
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  heroChipText: {
+    color: '#111827',
+    fontWeight: '700',
+    fontSize: 12,
+  },
+  heroGhostBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  heroGhostBtnText: {
+    color: '#111827',
+    fontWeight: '700',
+    fontSize: 12,
+  },
+  sectionCard: {
+    backgroundColor: '#fff',
+    borderRadius: 22,
+    padding: 16,
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  sectionHeader: {
+    marginBottom: 14,
+  },
+  sectionHeaderRow: {
+    marginBottom: 14,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#111827',
+  },
+  sectionHint: {
+    marginTop: 4,
+    color: '#6b7280',
+    fontSize: 12,
+    lineHeight: 17,
   },
   inputGroup: {
     marginBottom: 20,
   },
+  inputGroupNoMargin: {
+    marginBottom: 0,
+  },
   label: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#000',
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1f2937',
     marginBottom: 8,
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
   },
   inputWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#f5f5f5',
-    borderRadius: 12,
-    borderWidth: 2,
-    borderColor: '#f5f5f5',
+    backgroundColor: '#f8fafc',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
     paddingHorizontal: 16,
     minHeight: 56,
   },
@@ -473,13 +607,25 @@ const styles = StyleSheet.create({
   input: {
     flex: 1,
     fontSize: 16,
-    color: '#000',
+    color: '#111827',
     paddingVertical: 16,
+  },
+  disabledInputWrapper: {
+    backgroundColor: '#f3f4f6',
+    borderColor: '#e5e7eb',
+  },
+  disabledInput: {
+    color: '#888',
+  },
+  fieldHint: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginTop: 8,
   },
   cityText: {
     flex: 1,
     fontSize: 16,
-    color: '#000',
+    color: '#111827',
     paddingVertical: 16,
   },
   cityPlaceholder: {
@@ -544,37 +690,54 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: '600',
   },
-  childRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  childCard: {
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 14,
+    padding: 10,
     marginBottom: 12,
   },
+  childCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  childCardTitle: {
+    color: '#111827',
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  childNameInput: {
+    marginBottom: 10,
+  },
   removeButton: {
-    marginLeft: 8,
+    marginLeft: 6,
     padding: 4,
   },
   addChildButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    alignSelf: 'flex-start',
-    marginTop: 8,
+    backgroundColor: '#f3f4f6',
+    borderRadius: 12,
+    paddingHorizontal: 10,
     paddingVertical: 8,
   },
   addChildText: {
-    color: '#000',
-    fontWeight: 'bold',
-    fontSize: 16,
+    color: '#111827',
+    fontWeight: '700',
+    fontSize: 12,
   },
   saveBtn: {
-    backgroundColor: '#000',
-    borderRadius: 12,
+    backgroundColor: '#111827',
+    borderRadius: 14,
     height: 56,
     justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 8,
+    marginTop: 2,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
+    shadowOpacity: 0.18,
     shadowRadius: 8,
     elevation: 4,
   },
@@ -583,51 +746,49 @@ const styles = StyleSheet.create({
   },
   saveBtnText: {
     color: '#fff',
-    fontSize: 18,
-    fontWeight: 'bold',
+    fontSize: 16,
+    fontWeight: '800',
     letterSpacing: 0.5,
-  },
-  profileSection: {
-    alignItems: 'center',
-    marginBottom: 24,
   },
   profileImageContainer: {
     position: 'relative',
-    marginBottom: 12,
+    marginBottom: 0,
+    alignSelf: 'center',
   },
   profileImage: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
+    width: 112,
+    height: 112,
+    borderRadius: 56,
     borderWidth: 4,
-    borderColor: '#fff',
+    borderColor: '#f9fafb',
   },
   profileImagePlaceholder: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    backgroundColor: '#fff',
+    width: 112,
+    height: 112,
+    borderRadius: 56,
+    backgroundColor: '#f3f4f6',
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 4,
-    borderColor: '#fff',
+    borderColor: '#f9fafb',
   },
   profileImageOverlay: {
     position: 'absolute',
     bottom: 0,
     right: 0,
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#000',
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#111827',
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 3,
-    borderColor: '#fff',
+    borderColor: '#f9fafb',
   },
-  profileLabel: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#000',
+  bottomSafeHint: {
+    color: 'rgba(255,255,255,0.72)',
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: 10,
   },
 });

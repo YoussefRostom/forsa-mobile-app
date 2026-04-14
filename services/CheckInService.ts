@@ -15,6 +15,7 @@ import { getUserByCheckInCode } from './CheckInCodeService';
 import { getCurrentUserRole } from './UserRoleService';
 import { doc, getDoc } from 'firebase/firestore';
 import { notifyAdmins, createNotification } from './NotificationService';
+import { registerCheckInMonetization } from './MonetizationService';
 
 export type CheckInLocationRole = 'academy' | 'clinic';
 
@@ -30,6 +31,10 @@ export interface CheckIn {
   meta?: {
     deviceTime?: number;
     note?: string | null;
+    linkedBookingId?: string | null;
+    walkInServiceName?: string | null;
+    walkInGrossAmount?: number | null;
+    walkInCommissionPercentage?: number | null;
   };
   // Denormalized fields (optional, for admin UI speed)
   userName?: string;
@@ -39,6 +44,93 @@ export interface CheckIn {
 export interface CheckInFilters {
   todayOnly?: boolean;
   locationRole?: CheckInLocationRole;
+}
+
+export type WalkInServiceDetails = {
+  serviceName: string;
+  grossAmount: number;
+  commissionPercentage: number;
+};
+
+export type CreateCheckInOptions = {
+  note?: string;
+  linkedBookingId?: string | null;
+  walkInService?: WalkInServiceDetails | null;
+  walkInCustomerType?: string | null;
+};
+
+type BookingEligibilityResult = {
+  eligible: boolean;
+  reason?: string;
+};
+
+function parseBookingDateTime(booking: any): Date | null {
+  const rawDate = String(booking?.date || '').trim();
+  if (!rawDate) return null;
+
+  const dmyMatch = rawDate.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  let parsedDate: Date | null = null;
+
+  if (dmyMatch) {
+    const day = Number(dmyMatch[1]);
+    const month = Number(dmyMatch[2]) - 1;
+    const year = Number(dmyMatch[3].length === 2 ? `20${dmyMatch[3]}` : dmyMatch[3]);
+    parsedDate = new Date(year, month, day, 0, 0, 0, 0);
+  } else {
+    const nativeParsed = new Date(rawDate);
+    if (!Number.isNaN(nativeParsed.getTime())) parsedDate = nativeParsed;
+  }
+
+  if (!parsedDate) return null;
+
+  const rawTime = String(booking?.time || '').trim().toLowerCase();
+  if (rawTime) {
+    const m = rawTime.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
+    if (m) {
+      let hour = Number(m[1]);
+      const minute = Number(m[2] || '0');
+      const meridiem = (m[3] || '').toLowerCase();
+      if (meridiem === 'pm' && hour < 12) hour += 12;
+      if (meridiem === 'am' && hour === 12) hour = 0;
+      parsedDate.setHours(hour, minute, 0, 0);
+    }
+  }
+
+  return parsedDate;
+}
+
+function isBookingEligibleForAttendance(booking: any, userId: string, locationId: string): BookingEligibilityResult {
+  const status = String(booking?.status || '').toLowerCase();
+  const allowedStatuses = ['pending', 'confirmed', 'new_time_proposed', 'timing_proposed', 'player_accepted'];
+
+  const belongsToUser = [booking?.playerId, booking?.parentId, booking?.userId, booking?.academyId].includes(userId);
+  if (!belongsToUser) {
+    return { eligible: false, reason: 'This booking is not linked to this customer.' };
+  }
+
+  if (booking?.providerId !== locationId) {
+    return { eligible: false, reason: 'This booking belongs to a different provider.' };
+  }
+
+  if (!allowedStatuses.includes(status)) {
+    return { eligible: false, reason: 'Booking is not eligible for attendance in its current status.' };
+  }
+
+  if (booking?.checkedInAt || booking?.lastCheckInId || String(booking?.attendanceStatus || '').toLowerCase() === 'checked_in') {
+    return { eligible: false, reason: 'This booking has already been checked in.' };
+  }
+
+  const bookingDateTime = parseBookingDateTime(booking);
+  if (bookingDateTime) {
+    const expiresAt = new Date(bookingDateTime);
+    expiresAt.setDate(expiresAt.getDate() + 1);
+    expiresAt.setHours(23, 59, 59, 999);
+    if (Date.now() > expiresAt.getTime()) {
+      return { eligible: false, reason: 'This booking QR has expired.' };
+    }
+  }
+
+  return { eligible: true };
 }
 
 /**
@@ -167,73 +259,144 @@ async function getLocationName(locationId: string): Promise<string | null> {
   }
 }
 
+async function findLinkedBookingForCheckIn(
+  userId: string,
+  locationId: string,
+  linkedBookingId?: string | null
+): Promise<any | null> {
+  try {
+    if (linkedBookingId) {
+      const bookingSnap = await getDoc(doc(db, 'bookings', linkedBookingId));
+      if (!bookingSnap.exists()) return null;
+      const booking = { id: bookingSnap.id, ...bookingSnap.data() } as any;
+      const eligibility = isBookingEligibleForAttendance(booking, userId, locationId);
+      return eligibility.eligible ? booking : null;
+    }
+
+    const snap = await getDocs(query(collection(db, 'bookings'), where('providerId', '==', locationId)));
+    const candidates = snap.docs
+      .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
+      .filter((booking: any) => {
+        const eligibility = isBookingEligibleForAttendance(booking, userId, locationId);
+        return eligibility.eligible;
+      })
+      .sort((a: any, b: any) => {
+        const aTime = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
+        const bTime = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
+        return bTime - aTime;
+      });
+
+    return candidates[0] || null;
+  } catch (error) {
+    console.warn('Failed to resolve linked booking for check-in:', error);
+    return null;
+  }
+}
+
 /**
  * Create a check-in from a scanned QR code
  * @param code - The check-in code extracted from QR (without "forsa_checkin:" prefix)
- * @param note - Optional note for the check-in
+ * @param options - Optional booking link, note, and walk-in service details
  */
 export async function createCheckInFromScan(
   code: string,
-  note?: string
+  options?: CreateCheckInOptions | string
 ): Promise<CheckIn> {
   const staffUser = auth.currentUser;
   if (!staffUser) {
     throw new Error('Staff user must be authenticated');
   }
 
+  const normalizedOptions: CreateCheckInOptions =
+    typeof options === 'string' ? { note: options } : (options || {});
+
   try {
-    // Get staff role
     const staffRole = await getCurrentUserRole();
-    
     if (staffRole !== 'academy' && staffRole !== 'clinic') {
       throw new Error('Only academy and clinic staff can create check-ins');
     }
 
-    // Get user ID from check-in code
     const userId = await getUserByCheckInCode(code);
     if (!userId) {
       throw new Error('Invalid check-in code');
     }
 
-    // Verify user exists and has correct role
     const userRef = doc(db, 'users', userId);
     const userDoc = await getDoc(userRef);
-    
     if (!userDoc.exists()) {
       throw new Error('User not found');
     }
-    
+
     const userData = userDoc.data();
     const userRole = userData.role?.toLowerCase();
-    
     if (userRole !== 'player' && userRole !== 'parent') {
       throw new Error('Check-in code belongs to a user who cannot check in');
     }
 
-    // Check for recent check-in (5 minute cooldown)
-    const locationId = staffUser.uid; // Staff's own uid is the location
-    const hasRecent = await hasRecentCheckIn(userId, locationId, 5);
-    
-    if (hasRecent) {
-      throw new Error('User has already checked in recently. Please wait before scanning again.');
+    const locationId = staffUser.uid;
+
+    // Determine scan type: booking QR (explicit bookingId embedded) vs personal code (reusable)
+    const isBookingQrScan = Boolean(normalizedOptions.linkedBookingId);
+
+    // Personal code scans: apply time-based cooldown to prevent walk-in duplicates within the same session.
+    // Booking QR scans: skip cooldown — each booking is protected by its own one-time duplicate check below.
+    if (!isBookingQrScan) {
+      const hasRecent = await hasRecentCheckIn(userId, locationId, 5);
+      if (hasRecent) {
+        throw new Error('User has already checked in recently. Please wait before scanning again.');
+      }
     }
 
-    // Get user and location names for denormalization
+    // Only look up a linked booking when a specific bookingId was embedded in the QR.
+    // Personal-code scans must never auto-link to a booking — they are always walk-in visits.
+    const linkedBooking = isBookingQrScan
+      ? await findLinkedBookingForCheckIn(userId, locationId, normalizedOptions.linkedBookingId)
+      : null;
+
+    if (isBookingQrScan && !linkedBooking) {
+      throw new Error('Invalid, expired, or already used booking QR code.');
+    }
+
+    if (linkedBooking?.id) {
+      const duplicateBookingCheckIn = await getDocs(
+        query(
+          collection(db, 'checkins'),
+          where('meta.linkedBookingId', '==', linkedBooking.id),
+          limit(1)
+        )
+      );
+      if (!duplicateBookingCheckIn.empty) {
+        throw new Error('This booking has already been checked in. Each booking can only be scanned once.');
+      }
+    }
+
+    const walkInService = normalizedOptions.walkInService || null;
+    if (!linkedBooking && !walkInService) {
+      const serviceError: any = new Error('Walk-in service details are required when no booking exists.');
+      serviceError.code = 'service-details-required';
+      throw serviceError;
+    }
+
     const userName = await getUserName(userId);
     const locationName = await getLocationName(locationId);
 
-    // Create check-in document
     const checkInData = {
-      userId: userId,
+      userId,
       userRole: userRole as 'player' | 'parent',
       userCheckInCode: code,
-      locationId: locationId,
+      locationId,
       locationRole: staffRole as CheckInLocationRole,
+      status: 'completed',
       createdAt: serverTimestamp(),
       createdBy: staffUser.uid,
       meta: {
         deviceTime: Date.now(),
-        note: note || null,
+        note: normalizedOptions.note || null,
+        linkedBookingId: linkedBooking?.id || normalizedOptions.linkedBookingId || null,
+        walkInServiceName: walkInService?.serviceName || null,
+        walkInGrossAmount: walkInService?.grossAmount ?? null,
+        walkInCommissionPercentage: walkInService?.commissionPercentage ?? null,
+        walkInCustomerType: normalizedOptions.walkInCustomerType || null,
       },
       userName: userName || null,
       locationName: locationName || null,
@@ -241,6 +404,12 @@ export async function createCheckInFromScan(
 
     const checkInsRef = collection(db, 'checkins');
     const checkInRef = await addDoc(checkInsRef, checkInData);
+
+    try {
+      await registerCheckInMonetization(checkInRef.id, { id: checkInRef.id, ...checkInData }, staffUser.uid);
+    } catch (financeError) {
+      console.warn('Check-in monetization sync failed:', financeError);
+    }
 
     try {
       await notifyAdmins(
@@ -260,14 +429,16 @@ export async function createCheckInFromScan(
       console.warn('Check-in notification failed:', e);
     }
 
-    // Return the created check-in
     return {
       id: checkInRef.id,
       ...checkInData,
-      createdAt: Timestamp.now(), // Approximate, will be updated by server
+      createdAt: Timestamp.now(),
     } as CheckIn;
   } catch (error: any) {
     console.error('Error creating check-in:', error);
+    if (error?.code === 'service-details-required') {
+      throw error;
+    }
     throw new Error(`Failed to create check-in: ${error.message}`);
   }
 }

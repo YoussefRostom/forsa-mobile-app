@@ -8,6 +8,7 @@ import i18n from '../locales/i18n';
 import { auth, db } from '../lib/firebase';
 import { doc, getDoc, collection, addDoc } from 'firebase/firestore';
 import { notifyProviderAndAdmins, createNotification } from '../services/NotificationService';
+import { upsertBookingTransaction } from '../services/MonetizationService';
 
 export default function AcademyClinicDetailsScreen() {
   const params = useLocalSearchParams();
@@ -199,6 +200,7 @@ export default function AcademyClinicDetailsScreen() {
       };
 
       const bookingRef = await addDoc(collection(db, 'bookings'), bookingData);
+      await upsertBookingTransaction(bookingRef.id, bookingData, user.uid, 'Academy-to-clinic booking created');
       const providerId = clinic?.id;
       try {
         if (providerId) {

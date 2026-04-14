@@ -17,8 +17,7 @@ import {
   DocumentSnapshot
 } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
-import { getCurrentUserRole } from './UserRoleService';
-import { notifyAdmins } from './NotificationService';
+import { createNotification } from './NotificationService';
 
 export interface Message {
   id: string;
@@ -165,32 +164,45 @@ export async function sendMessage(
       lastMessageSenderId: currentUser.uid,
     });
 
-    // If the recipient is an admin, notify all admins so they receive a notification
+    // Notify the message recipient for all roles (admin, player, parent, academy, clinic, agent).
+    // This drives both notifications list screens and push delivery.
     try {
       const parts = conversationId.split('_');
       const otherUserId = parts[0] === currentUser.uid ? parts[1] : parts[0];
-      // fetch other user role
-      const otherUserRef = doc(db, 'users', otherUserId);
-      const otherSnap = await getDoc(otherUserRef);
-      if (otherSnap.exists()) {
-        const otherData: any = otherSnap.data();
-        const role = otherData.role || otherData.role?.toLowerCase?.();
-        if (role === 'admin' || role === 'Admin') {
-          // fetch sender name
-          const senderRef = doc(db, 'users', currentUser.uid);
-          const senderSnap = await getDoc(senderRef);
-          const senderName = senderSnap.exists() ? ((senderSnap.data() as any).firstName || (senderSnap.data() as any).email || 'User') : 'User';
-          // Notify all admins
-          await notifyAdmins(
-            `New message from ${senderName}`,
-            content.trim() || 'Sent a message',
-            'info',
-            { senderId: currentUser.uid, conversationId }
-          );
-        }
+
+      if (otherUserId && otherUserId !== currentUser.uid) {
+        const otherUserRef = doc(db, 'users', otherUserId);
+        const otherUserSnap = await getDoc(otherUserRef);
+        const otherRole = otherUserSnap.exists() ? String((otherUserSnap.data() as any)?.role || '').toLowerCase() : '';
+        const notificationRoute = otherRole === 'admin' ? '/(admin)/notifications' : '/notifications';
+
+        const senderRef = doc(db, 'users', currentUser.uid);
+        const senderSnap = await getDoc(senderRef);
+        const senderData: any = senderSnap.exists() ? senderSnap.data() : null;
+        const senderName =
+          senderData?.parentName ||
+          senderData?.academyName ||
+          senderData?.clinicName ||
+          senderData?.agentName ||
+          senderData?.name ||
+          `${senderData?.firstName || ''} ${senderData?.lastName || ''}`.trim() ||
+          senderData?.email ||
+          'User';
+
+        await createNotification({
+          userId: otherUserId,
+          title: `New message from ${senderName}`,
+          body: content.trim() || 'Sent a message',
+          type: 'info',
+          data: {
+            senderId: currentUser.uid,
+            conversationId,
+            route: notificationRoute,
+          },
+        });
       }
     } catch (err) {
-      console.warn('Failed to notify admins about message:', err);
+      console.warn('Failed to create message notification:', err);
     }
 
     return messageId;
@@ -560,8 +572,10 @@ export async function getMessages(
  */
 export function subscribeToMessages(
   conversationId: string,
-  callback: (messages: Message[]) => void
+  callback: (messages: Message[]) => void,
+  onError?: (error: any) => void
 ): () => void {
+  const currentUserId = auth.currentUser?.uid;
   const messagesRef = collection(db, 'conversations', conversationId, 'messages');
   const q = query(
     messagesRef,
@@ -570,57 +584,80 @@ export function subscribeToMessages(
 
   const senderCache: { [key: string]: any } = {};
 
-  const unsubscribe = onSnapshot(q, async (snapshot) => {
-    const messages: Message[] = [];
-    
-    snapshot.forEach((docSnap) => {
-      const data = docSnap.data();
-      messages.push({
-        id: docSnap.id,
-        conversationId,
-        senderId: data.senderId,
-        content: data.content || '',
-        mediaUrl: data.mediaUrl,
-        isRead: data.isRead || false,
-        createdAt: data.createdAt,
+  const unsubscribe = onSnapshot(
+    q,
+    async (snapshot) => {
+      const messages: Message[] = [];
+
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        messages.push({
+          id: docSnap.id,
+          conversationId,
+          senderId: data.senderId,
+          content: data.content || '',
+          mediaUrl: data.mediaUrl,
+          isRead: data.isRead || false,
+          createdAt: data.createdAt,
+        });
       });
-    });
 
-    // Fetch sender names for new senders
-    const senderIds = [...new Set(messages.map(m => m.senderId))];
-    const newSenderIds = senderIds.filter(id => !senderCache[id]);
+      // Fetch sender names for new senders
+      const senderIds = [...new Set(messages.map(m => m.senderId))];
+      const newSenderIds = senderIds.filter(id => !senderCache[id]);
 
-    await Promise.all(
-      newSenderIds.map(async (senderId) => {
-        try {
-          const userRef = doc(db, 'users', senderId);
-          const userSnap = await getDoc(userRef);
-          if (userSnap.exists()) {
-            const userData = userSnap.data();
-            senderCache[senderId] = {
-              name: userData.firstName && userData.lastName
-                ? `${userData.firstName} ${userData.lastName}`
-                : userData.firstName || userData.lastName || userData.email || userData.phone || 'Unknown',
-              photo: userData.profilePhoto,
-            };
+      await Promise.all(
+        newSenderIds.map(async (senderId) => {
+          try {
+            const userRef = doc(db, 'users', senderId);
+            const userSnap = await getDoc(userRef);
+            if (userSnap.exists()) {
+              const userData = userSnap.data();
+              senderCache[senderId] = {
+                name: userData.firstName && userData.lastName
+                  ? `${userData.firstName} ${userData.lastName}`
+                  : userData.firstName || userData.lastName || userData.email || userData.phone || 'Unknown',
+                photo: userData.profilePhoto,
+              };
+            }
+          } catch (error) {
+            console.error(`Error fetching sender ${senderId}:`, error);
           }
-        } catch (error) {
-          console.error(`Error fetching sender ${senderId}:`, error);
+        })
+      );
+
+      // Enrich messages with sender info
+      messages.forEach((msg) => {
+        const sender = senderCache[msg.senderId];
+        if (sender) {
+          msg.senderName = sender.name;
+          msg.senderPhoto = sender.photo;
         }
-      })
-    );
+      });
 
-    // Enrich messages with sender info
-    messages.forEach((msg) => {
-      const sender = senderCache[msg.senderId];
-      if (sender) {
-        msg.senderName = sender.name;
-        msg.senderPhoto = sender.photo;
+      callback(messages);
+
+      const hasUnreadFromOtherUser = !!currentUserId && messages.some(
+        (msg) => !msg.isRead && msg.senderId !== currentUserId
+      );
+      if (hasUnreadFromOtherUser) {
+        markMessagesAsRead(conversationId).catch((error) => {
+          console.warn('Auto mark-as-read failed:', error);
+        });
       }
-    });
+    },
+    (error: any) => {
+      if (error?.code === 'permission-denied') {
+        console.warn('Chat subscription blocked by permission-denied for conversation:', conversationId);
+        callback([]);
+        onError?.(error);
+        return;
+      }
 
-    callback(messages);
-  });
+      console.error('Error subscribing to messages:', error);
+      onError?.(error);
+    }
+  );
 
   return unsubscribe;
 }
@@ -657,6 +694,13 @@ export async function markMessagesAsRead(
 
     await Promise.all(updatePromises);
   } catch (error: any) {
+    // Some deployments restrict message read-receipt updates by rules.
+    // Do not break chat initialization/subscriptions when that happens.
+    if (error?.code === 'permission-denied') {
+      console.warn('Skipping markMessagesAsRead due to permission-denied');
+      return;
+    }
+
     console.error('Error marking messages as read:', error);
     throw error;
   }

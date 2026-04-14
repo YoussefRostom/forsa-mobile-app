@@ -5,4 +5,7 @@
 expo-env.d.ts
 node_modules
 .env
+.firebase/
+firebase-debug.log
+firebase-debug.*.log
 # @end expo-cli

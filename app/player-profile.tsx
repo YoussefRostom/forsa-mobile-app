@@ -9,7 +9,7 @@ import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import SimpleSelect from '../components/SimpleSelect';
 import i18n from '../locales/i18n';
 import { auth, db } from '../lib/firebase';
-import { doc, getDoc, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { uploadMedia } from '../services/MediaService';
 
 const POSITIONS = ['GK', 'LB', 'CB', 'RB', 'CDM', 'CM', 'CAM', 'RW', 'LW', 'ST'];
@@ -18,6 +18,28 @@ const getPositionLabel = (pos: string) => {
   const translated = i18n.t(pos);
   return translated && translated !== pos ? translated : pos;
 };
+
+const createProfileSnapshot = (data?: Partial<{
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  city: string;
+  position: string;
+  dob: string;
+  profilePhoto: string | null;
+}>) => ({
+  firstName: data?.firstName?.trim() || '',
+  lastName: data?.lastName?.trim() || '',
+  email: data?.email?.trim() || '',
+  phone: data?.phone?.trim() || '',
+  city: data?.city?.trim() || '',
+  position: data?.position?.trim() || '',
+  dob: data?.dob?.trim() || '',
+  profilePhoto: data?.profilePhoto?.trim() || '',
+});
+
+const isValidEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 
 export default function PlayerProfileScreen() {
   const { openMenu } = useHamburgerMenu();
@@ -37,6 +59,45 @@ export default function PlayerProfileScreen() {
   const [showPositionModal, setShowPositionModal] = useState(false);
   const [showDobPicker, setShowDobPicker] = useState(false);
   const [selectedDobDate, setSelectedDobDate] = useState<Date | null>(null);
+  const [initialProfile, setInitialProfile] = useState(() => createProfileSnapshot());
+
+  const accountEmail = auth.currentUser?.email?.trim() || '';
+  const accountPhone = auth.currentUser?.phoneNumber?.trim() || '';
+  const displayName = [firstName, lastName].filter((item) => item.trim().length > 0).join(' ').trim()
+    || (i18n.t('playerRoleLabel') || 'Player');
+  const visibleEmail = (email || accountEmail || '').trim();
+  const visiblePhone = (phone || accountPhone || '').trim();
+  const signInSummary = accountEmail && accountPhone
+    ? `${i18n.t('email') || 'Email'}: ${accountEmail}\n${i18n.t('phone') || 'Phone'}: ${accountPhone}`
+    : accountPhone
+      ? `${i18n.t('signedInWith') || 'Signed in with'} ${accountPhone}`
+      : accountEmail
+        ? `${i18n.t('signedInWith') || 'Signed in with'} ${accountEmail}`
+        : (i18n.t('contactMethodRequired') || 'Add at least one email or phone number.');
+  const completionFields = [
+    firstName,
+    lastName,
+    accountEmail || email,
+    accountPhone || phone,
+    city,
+    position,
+    dob,
+    profilePhoto || profilePhotoUrl,
+  ];
+  const profileCompletion = Math.round(
+    (completionFields.filter((item) => String(item || '').trim().length > 0).length / completionFields.length) * 100
+  );
+  const currentProfileSnapshot = createProfileSnapshot({
+    firstName,
+    lastName,
+    email: email || accountEmail,
+    phone: phone || accountPhone,
+    city,
+    position,
+    dob,
+    profilePhoto: profilePhoto || profilePhotoUrl || '',
+  });
+  const hasChanges = JSON.stringify(currentProfileSnapshot) !== JSON.stringify(initialProfile);
 
   useEffect(() => {
     Animated.timing(fadeAnim, {
@@ -59,43 +120,54 @@ export default function PlayerProfileScreen() {
         return;
       }
 
-      // Try fetching from 'players' collection first as it's role specific
       const playerDocRef = doc(db, 'players', user.uid);
-      const playerDocSnap = await getDoc(playerDocRef);
+      const userDocRef = doc(db, 'users', user.uid);
+      const [playerDocSnap, userDocSnap] = await Promise.all([
+        getDoc(playerDocRef),
+        getDoc(userDocRef),
+      ]);
 
-      if (playerDocSnap.exists()) {
-        const data = playerDocSnap.data();
-        setFirstName(data.firstName || '');
-        setLastName(data.lastName || '');
-        setEmail(data.email || '');
-        setPhone(data.phone || '');
-        setCity(data.city || '');
-        setPosition(data.position || '');
-        setDob(data.dob || '');
-        if (data.profilePhoto) {
-          setProfilePhoto(data.profilePhoto);
-          setProfilePhotoUrl(data.profilePhoto);
-        }
-      } else {
-        // Fallback to 'users' collection if not found in 'players'
-        const userDocRef = doc(db, 'users', user.uid);
-        const userDocSnap = await getDoc(userDocRef);
+      const mergedData = {
+        ...(userDocSnap.exists() ? userDocSnap.data() : {}),
+        ...(playerDocSnap.exists() ? playerDocSnap.data() : {}),
+      } as Record<string, any>;
 
-        if (userDocSnap.exists()) {
-          const data = userDocSnap.data();
-          setFirstName(data.firstName || '');
-          setLastName(data.lastName || '');
-          setEmail(data.email || '');
-          setPhone(data.phone || '');
-          setCity(data.city || '');
-          setPosition(data.position || '');
-          setDob(data.dob || '');
-          if (data.profilePhoto) {
-            setProfilePhoto(data.profilePhoto);
-            setProfilePhotoUrl(data.profilePhoto);
-          }
+      const nextFirstName = mergedData.firstName || '';
+      const nextLastName = mergedData.lastName || '';
+      const nextEmail = mergedData.email || user.email || '';
+      const nextPhone = mergedData.phone || user.phoneNumber || '';
+      const nextCity = mergedData.city || '';
+      const nextPosition = mergedData.position || '';
+      const nextDob = mergedData.dob || '';
+      const nextProfilePhoto = mergedData.profilePhoto || null;
+
+      setFirstName(nextFirstName);
+      setLastName(nextLastName);
+      setEmail(nextEmail);
+      setPhone(nextPhone);
+      setCity(nextCity);
+      setPosition(nextPosition);
+      setDob(nextDob);
+      setProfilePhoto(nextProfilePhoto);
+      setProfilePhotoUrl(nextProfilePhoto);
+
+      if (nextDob) {
+        const parsedDob = new Date(nextDob);
+        if (!Number.isNaN(parsedDob.getTime())) {
+          setSelectedDobDate(parsedDob);
         }
       }
+
+      setInitialProfile(createProfileSnapshot({
+        firstName: nextFirstName,
+        lastName: nextLastName,
+        email: nextEmail,
+        phone: nextPhone,
+        city: nextCity,
+        position: nextPosition,
+        dob: nextDob,
+        profilePhoto: nextProfilePhoto || '',
+      }));
     } catch (error) {
       console.error('Error fetching user data:', error);
       Alert.alert(i18n.t('error') || 'Error', 'Failed to load profile data');
@@ -131,24 +203,37 @@ export default function PlayerProfileScreen() {
   };
 
   const handleSave = async () => {
-    // Only require phone number - other fields are optional
-    if (!phone || !phone.trim()) {
-      Alert.alert(i18n.t('error') || 'Error', i18n.t('phoneRequired') || 'Phone number is required');
+    const user = auth.currentUser;
+    if (!user) {
+      Alert.alert(i18n.t('error') || 'Error', 'User not authenticated');
+      return;
+    }
+
+    const trimmedEmail = email.trim();
+    const trimmedPhone = phone.trim();
+    const resolvedEmail = trimmedEmail || user.email || '';
+    const resolvedPhone = trimmedPhone || user.phoneNumber || '';
+
+    if (!resolvedEmail && !resolvedPhone) {
+      Alert.alert(i18n.t('error') || 'Error', i18n.t('contactMethodRequired') || 'Add at least one email or phone number.');
+      return;
+    }
+
+    if (trimmedEmail && !isValidEmail(trimmedEmail)) {
+      Alert.alert(i18n.t('error') || 'Error', i18n.t('invalidEmail') || 'Please enter a valid email address.');
+      return;
+    }
+
+    if (!hasChanges) {
+      Alert.alert(i18n.t('success') || 'Success', i18n.t('allChangesSaved') || 'Your profile is already up to date.');
       return;
     }
 
     setUploading(true);
     try {
-      const user = auth.currentUser;
-      if (!user) {
-        Alert.alert(i18n.t('error') || 'Error', 'User not authenticated');
-        return;
-      }
-
       let finalProfilePhotoUrl = profilePhotoUrl;
 
-      // Upload profile photo to Cloudinary if it's a new local image
-      if (profilePhoto && profilePhoto !== profilePhotoUrl && 
+      if (profilePhoto && profilePhoto !== profilePhotoUrl &&
           (profilePhoto.startsWith('file://') || profilePhoto.startsWith('content://'))) {
         try {
           const cloudinaryResponse = await uploadMedia(profilePhoto, 'image');
@@ -162,29 +247,31 @@ export default function PlayerProfileScreen() {
         }
       }
 
-      // Prepare update data - only include fields that have values
-      const updateData: any = {
-        phone: phone.trim(),
-        updatedAt: new Date().toISOString()
+      const updateData = {
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        email: resolvedEmail,
+        phone: resolvedPhone,
+        city: city.trim(),
+        position: position.trim(),
+        dob: dob.trim(),
+        profilePhoto: finalProfilePhotoUrl || '',
+        updatedAt: new Date().toISOString(),
       };
 
-      // Only include optional fields if they have values
-      if (firstName && firstName.trim()) updateData.firstName = firstName.trim();
-      if (lastName && lastName.trim()) updateData.lastName = lastName.trim();
-      if (email && email.trim()) updateData.email = email.trim();
-      if (city && city.trim()) updateData.city = city.trim();
-      if (position && position.trim()) updateData.position = position.trim();
-      if (dob && dob.trim()) updateData.dob = dob.trim();
-      if (finalProfilePhotoUrl) updateData.profilePhoto = finalProfilePhotoUrl;
+      await Promise.all([
+        setDoc(doc(db, 'players', user.uid), updateData, { merge: true }),
+        setDoc(doc(db, 'users', user.uid), updateData, { merge: true }),
+      ]);
 
-      // Update both 'players' and 'users' collections
-      await updateDoc(doc(db, 'players', user.uid), updateData);
-      await updateDoc(doc(db, 'users', user.uid), updateData);
-
-      // Update local state to show the uploaded URL
       if (finalProfilePhotoUrl) {
         setProfilePhoto(finalProfilePhotoUrl);
       }
+
+      setInitialProfile(createProfileSnapshot({
+        ...updateData,
+        profilePhoto: finalProfilePhotoUrl || '',
+      }));
 
       Alert.alert(i18n.t('success') || 'Success', i18n.t('profileUpdated') || 'Profile updated successfully!');
     } catch (error) {
@@ -230,22 +317,45 @@ export default function PlayerProfileScreen() {
             {/* Profile Photo Section */}
             <View style={styles.profileSection}>
               <TouchableOpacity onPress={pickProfilePhoto} style={styles.profileImageContainer}>
-            {profilePhoto ? (
+                {profilePhoto ? (
                   <Image source={{ uri: profilePhoto }} style={styles.profileImage} />
-            ) : (
+                ) : (
                   <View style={styles.profileImagePlaceholder}>
                     <Ionicons name="camera" size={32} color="#999" />
                   </View>
-            )}
+                )}
                 <View style={styles.profileImageOverlay}>
                   <Ionicons name="camera" size={20} color="#fff" />
                 </View>
-          </TouchableOpacity>
+              </TouchableOpacity>
               <Text style={styles.profileLabel}>{i18n.t('profile_picture') || 'Profile Picture'}</Text>
-        </View>
+              <Text style={styles.profilePhotoHint}>{i18n.t('profilePhotoHint') || 'Tap the photo to change it.'}</Text>
+            </View>
+
+            <View style={styles.overviewCard}>
+              <View style={styles.overviewHeaderRow}>
+                <View style={styles.overviewTextWrap}>
+                  <Text style={styles.profileName}>{displayName}</Text>
+                  <Text style={styles.profileMeta}>{signInSummary}</Text>
+                </View>
+                <View style={styles.completionBadge}>
+                  <Text style={styles.completionBadgeValue}>{profileCompletion}%</Text>
+                  <Text style={styles.completionBadgeLabel}>{i18n.t('completeShort') || 'complete'}</Text>
+                </View>
+              </View>
+              <View style={styles.completionTrack}>
+                <View style={[styles.completionFill, { width: `${Math.max(profileCompletion, 6)}%` }]} />
+              </View>
+              <Text style={styles.overviewHint}>
+                {i18n.t('profileCompletionHint') || 'Complete your details so coaches, academies, and scouts can review you faster.'}
+              </Text>
+            </View>
 
             {/* Form Card */}
             <View style={styles.formCard}>
+              <Text style={styles.sectionHeading}>{i18n.t('basicInformation') || 'Basic information'}</Text>
+              <Text style={styles.sectionHelper}>{i18n.t('updateYourInformation') || 'Update your information'}</Text>
+
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>{i18n.t('first_name') || 'First Name'}</Text>
                 <View style={styles.inputWrapper}>
@@ -276,36 +386,69 @@ export default function PlayerProfileScreen() {
           </View>
               </View>
 
+              <View style={styles.sectionDivider} />
+              <Text style={styles.sectionHeading}>{i18n.t('accountAccess') || 'Account access'}</Text>
+              <Text style={styles.sectionHelper}>
+                {i18n.t('accountAccessHint') || 'Your sign-in email or phone stays protected here so you always know how this account is accessed.'}
+              </Text>
+              <View style={styles.accountPillRow}>
+                {!!accountEmail && (
+                  <View style={styles.accountPill}>
+                    <Ionicons name="mail-outline" size={14} color="#111827" />
+                    <Text style={styles.accountPillText}>{i18n.t('emailSignIn') || 'Email sign-in'}</Text>
+                  </View>
+                )}
+                {!!accountPhone && (
+                  <View style={styles.accountPill}>
+                    <Ionicons name="call-outline" size={14} color="#111827" />
+                    <Text style={styles.accountPillText}>{i18n.t('phoneSignIn') || 'Phone sign-in'}</Text>
+                  </View>
+                )}
+              </View>
+
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>{i18n.t('email') || 'Email'}</Text>
-                <View style={styles.inputWrapper}>
-                  <Ionicons name="mail-outline" size={20} color="#999" style={styles.inputIcon} />
-          <TextInput
-            style={styles.input}
-            value={email}
-            onChangeText={setEmail}
-            keyboardType="email-address"
-            autoCapitalize="none"
-                    placeholder={i18n.t('email_ph') || 'Enter email'}
-                    placeholderTextColor="#999"
-                  />
+                <View style={[styles.inputWrapper, accountEmail && styles.disabledInputWrapper]}>
+                  <Ionicons name="mail-outline" size={20} color={accountEmail ? '#bbb' : '#999'} style={styles.inputIcon} />
+                  {accountEmail ? (
+                    <Text style={styles.readOnlyValueText} selectable>
+                      {visibleEmail || (i18n.t('email_ph') || 'Enter email')}
+                    </Text>
+                  ) : (
+                    <TextInput
+                      style={styles.input}
+                      value={email}
+                      onChangeText={setEmail}
+                      keyboardType="email-address"
+                      autoCapitalize="none"
+                      placeholder={i18n.t('email_ph') || 'Enter email'}
+                      placeholderTextColor="#999"
+                    />
+                  )}
                 </View>
+                <Text style={styles.fieldHint}>
+                  {accountEmail
+                    ? (i18n.t('signInEmailLockedHint') || 'This is your actual sign-in email and is shown in full here.')
+                    : (i18n.t('contactEmailHint') || 'Optional contact email for updates and recovery.')}
+                </Text>
               </View>
 
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>{i18n.t('phone') || 'Phone'}</Text>
-                <View style={styles.inputWrapper}>
-                  <Ionicons name="call-outline" size={20} color="#999" style={styles.inputIcon} />
-          <TextInput
-            style={styles.input}
-            value={phone}
-            onChangeText={setPhone}
-            keyboardType="phone-pad"
-                    placeholder={i18n.t('phone_ph') || 'Enter phone number'}
-                    placeholderTextColor="#999"
-                  />
+                <View style={[styles.inputWrapper, styles.disabledInputWrapper]}>
+                  <Ionicons name="call-outline" size={20} color="#bbb" style={styles.inputIcon} />
+                  <Text style={styles.readOnlyValueText} selectable>
+                    {visiblePhone || (i18n.t('phone_ph') || 'Enter phone number')}
+                  </Text>
                 </View>
+                <Text style={styles.fieldHint}>
+                  {i18n.t('signInPhoneLockedHint') || 'Phone number cannot be changed here. Contact support if an update is needed.'}
+                </Text>
               </View>
+
+              <View style={styles.sectionDivider} />
+              <Text style={styles.sectionHeading}>{i18n.t('playerDetailsSection') || 'Player details'}</Text>
+              <Text style={styles.sectionHelper}>{i18n.t('profileCompletionHint') || 'Complete your details so coaches, academies, and scouts can review you faster.'}</Text>
 
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>{i18n.t('city') || 'City'}</Text>
@@ -439,18 +582,31 @@ export default function PlayerProfileScreen() {
                 )}
               </View>
 
+              <View style={styles.saveStatusRow}>
+                <Ionicons
+                  name={hasChanges ? 'alert-circle-outline' : 'checkmark-circle-outline'}
+                  size={18}
+                  color={hasChanges ? '#b45309' : '#15803d'}
+                />
+                <Text style={[styles.saveStatusText, !hasChanges && styles.saveStatusTextSaved]}>
+                  {hasChanges
+                    ? (i18n.t('unsavedChangesHint') || 'You have unsaved changes ready to save.')
+                    : (i18n.t('allChangesSaved') || 'Your profile is already up to date.')}
+                </Text>
+              </View>
+
               <TouchableOpacity
-                style={[styles.saveButton, uploading && styles.saveButtonDisabled]}
+                style={[styles.saveButton, (uploading || !hasChanges) && styles.saveButtonDisabled]}
                 onPress={handleSave}
-                disabled={uploading}
+                disabled={uploading || !hasChanges}
                 activeOpacity={0.8}
               >
                 {uploading ? (
                   <ActivityIndicator color="#fff" />
                 ) : (
-                  <Text style={styles.saveButtonText}>{i18n.t('save') || 'Save'}</Text>
+                  <Text style={styles.saveButtonText}>{i18n.t('saveChanges') || 'Save Changes'}</Text>
                 )}
-          </TouchableOpacity>
+              </TouchableOpacity>
         </View>
       </ScrollView>
         </Animated.View>
@@ -541,6 +697,81 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#fff',
+    marginBottom: 4,
+  },
+  profilePhotoHint: {
+    fontSize: 12,
+    color: 'rgba(255, 255, 255, 0.72)',
+    textAlign: 'center',
+  },
+  overviewCard: {
+    backgroundColor: 'rgba(255,255,255,0.96)',
+    borderRadius: 24,
+    padding: 18,
+    marginBottom: 18,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.18,
+    shadowRadius: 14,
+    elevation: 5,
+  },
+  overviewHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  overviewTextWrap: {
+    flex: 1,
+  },
+  profileName: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#111827',
+    marginBottom: 4,
+  },
+  profileMeta: {
+    fontSize: 13,
+    color: '#4b5563',
+    lineHeight: 18,
+  },
+  completionBadge: {
+    minWidth: 72,
+    backgroundColor: '#111827',
+    borderRadius: 16,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    alignItems: 'center',
+  },
+  completionBadgeValue: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  completionBadgeLabel: {
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 10,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  completionTrack: {
+    height: 10,
+    borderRadius: 999,
+    backgroundColor: '#e5e7eb',
+    overflow: 'hidden',
+    marginTop: 14,
+    marginBottom: 10,
+  },
+  completionFill: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: '#111827',
+  },
+  overviewHint: {
+    fontSize: 12,
+    color: '#4b5563',
+    lineHeight: 18,
   },
   formCard: {
     backgroundColor: '#fff',
@@ -552,6 +783,44 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 20,
     elevation: 10,
+  },
+  sectionHeading: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#111827',
+    marginBottom: 6,
+  },
+  sectionHelper: {
+    fontSize: 12,
+    color: '#6b7280',
+    lineHeight: 18,
+    marginBottom: 12,
+  },
+  sectionDivider: {
+    height: 1,
+    backgroundColor: '#e5e7eb',
+    marginBottom: 16,
+    marginTop: 2,
+  },
+  accountPillRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 18,
+  },
+  accountPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#f3f4f6',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  accountPillText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#111827',
   },
   inputGroup: {
     marginBottom: 20,
@@ -580,6 +849,27 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#000',
     paddingVertical: 16,
+  },
+  disabledInputWrapper: {
+    backgroundColor: '#efefef',
+    borderColor: '#e0e0e0',
+    opacity: 0.6,
+  },
+  disabledInput: {
+    color: '#888',
+  },
+  readOnlyValueText: {
+    flex: 1,
+    fontSize: 15,
+    color: '#374151',
+    lineHeight: 21,
+    paddingVertical: 16,
+  },
+  fieldHint: {
+    fontSize: 12,
+    color: '#6b7280',
+    lineHeight: 17,
+    marginTop: 8,
   },
   inputText: {
     flex: 1,
@@ -658,6 +948,27 @@ const styles = StyleSheet.create({
   cityOptionTextSelected: {
     color: '#fff',
     fontWeight: '600',
+  },
+  saveStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#f9fafb',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginTop: 4,
+    marginBottom: 10,
+  },
+  saveStatusText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#92400e',
+    lineHeight: 18,
+    fontWeight: '600',
+  },
+  saveStatusTextSaved: {
+    color: '#166534',
   },
   saveButton: {
     backgroundColor: '#000',

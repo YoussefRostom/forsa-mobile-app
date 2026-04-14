@@ -8,6 +8,7 @@ import { Video, ResizeMode } from 'expo-av';
 import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import PostActionsMenu from '../components/PostActionsMenu';
+import ZoomableFeedMedia from '../components/feed/ZoomableFeedMedia';
 import i18n from '../locales/i18n';
 import { auth } from '../lib/firebase';
 
@@ -227,33 +228,7 @@ const ClinicFeedScreen = () => {
           </View>
         </View>
         
-        {/* Media display */}
-        {item.mediaUrl && (
-          <View style={styles.mediaContainer}>
-            {item.mediaType === 'video' ? (
-              <Video
-                source={{ uri: item.mediaUrl }}
-                style={styles.mediaVideo}
-                useNativeControls
-                resizeMode={ResizeMode.CONTAIN}
-                isLooping={false}
-              />
-            ) : (
-              <Image 
-                source={{ uri: item.mediaUrl }} 
-                style={styles.mediaImage}
-                resizeMode="cover"
-              />
-            )}
-            <TouchableOpacity
-              style={styles.fullScreenButton}
-              onPress={() => setFullScreenMedia({ uri: item.mediaUrl, type: item.mediaType === 'video' ? 'video' : 'image' })}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="expand" size={24} color="#fff" />
-            </TouchableOpacity>
-          </View>
-        )}
+        <ZoomableFeedMedia post={item} />
         
         <Text style={styles.feedContent}>{item.content || ''}</Text>
       </View>
@@ -298,6 +273,10 @@ const ClinicFeedScreen = () => {
               keyExtractor={item => item.id}
               contentContainerStyle={styles.feedList}
               showsVerticalScrollIndicator={false}
+              initialNumToRender={5}
+              maxToRenderPerBatch={6}
+              windowSize={7}
+              removeClippedSubviews={Platform.OS === 'android'}
             />
           )}
         </Animated.View>

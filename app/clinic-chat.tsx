@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useState, useEffect, useRef } from 'react';
-import { FlatList, Image, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View, ActivityIndicator, Alert } from 'react-native';
+import { FlatList, Image, Keyboard, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View, ActivityIndicator, Alert } from 'react-native';
 import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import i18n from '../locales/i18n';
@@ -18,6 +18,7 @@ export default function ClinicChatScreen() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
   const [conversationIdState, setConversationIdState] = useState<string | null>(null);
   const { openMenu } = useHamburgerMenu();
   const router = useRouter();
@@ -89,16 +90,19 @@ export default function ClinicChatScreen() {
   }, [messages]);
 
   const handleSendMessage = async () => {
-    if (!input.trim() || !conversationIdState) return;
+    if (sending || !input.trim() || !conversationIdState) return;
+    const message = input.trim();
+    setSending(true);
+    setInput('');
+    Keyboard.dismiss();
 
     try {
-      await sendMessage(conversationIdState, input.trim());
-      setInput('');
-      
-      // Mark messages as read after sending
+      await sendMessage(conversationIdState, message);
       await markMessagesAsRead(conversationIdState);
     } catch (error: any) {
       console.error('Error sending message:', error);
+    } finally {
+      setSending(false);
     }
   };
 
@@ -117,7 +121,10 @@ export default function ClinicChatScreen() {
         >
           <Ionicons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>{contact}</Text>
+        <View style={styles.headerTitleWrap}>
+          <Text style={styles.headerTitle} numberOfLines={1}>{contact}</Text>
+          <Text style={styles.headerSubtitle}>{i18n.t('directMessages') || 'Direct messages'}</Text>
+        </View>
         <TouchableOpacity 
           style={styles.hamburgerBtn} 
           onPress={openMenu} 
@@ -141,19 +148,41 @@ export default function ClinicChatScreen() {
           renderItem={({ item }) => {
             const currentUserId = auth.currentUser?.uid;
             const isSent = item.senderId === currentUserId;
+            const timeLabel = item.createdAt?.toDate
+              ? new Date(item.createdAt.toDate()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+              : '';
             return (
-              <View style={[styles.messageBubble, isSent ? styles.myMessage : styles.systemMessage]}>
-                <Text style={isSent ? styles.myMessageText : styles.systemMessageText}>
-                  {item.content || (item.mediaUrl ? 'Media' : '')}
-                </Text>
+              <View style={[styles.messageRow, isSent ? styles.messageRowSent : styles.messageRowReceived]}>
+                {!isSent && (
+                  item.senderPhoto ? (
+                    <Image source={{ uri: item.senderPhoto }} style={styles.messageAvatarImage} />
+                  ) : (
+                    <View style={styles.messageAvatar}>
+                      <Ionicons name="person" size={16} color="#444444" />
+                    </View>
+                  )
+                )}
+                <View style={[styles.messageBubble, isSent ? styles.myMessage : styles.systemMessage]}>
+                  <Text style={isSent ? styles.myMessageText : styles.systemMessageText}>
+                    {item.content || (item.mediaUrl ? 'Media' : '')}
+                  </Text>
+                  {!!timeLabel && (
+                    <Text style={isSent ? styles.messageMetaSent : styles.messageMetaReceived}>
+                      {timeLabel}{isSent ? ` • ${item.isRead ? (i18n.t('messageSeen') || 'Seen') : (i18n.t('messageSent') || 'Sent')}` : ''}
+                    </Text>
+                  )}
+                </View>
               </View>
             );
           }}
-          contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: 100 }}
+          contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: 100, flexGrow: 1 }}
+          style={styles.chatList}
           keyboardShouldPersistTaps="handled"
           ListEmptyComponent={
-            <View style={{ alignItems: 'center', justifyContent: 'center', paddingVertical: 40 }}>
-              <Text style={{ color: '#999', fontSize: 16 }}>{i18n.t('noMessages') || 'No messages yet'}</Text>
+            <View style={styles.emptyState}>
+              <Ionicons name="chatbubble-ellipses-outline" size={46} color="#9ca3af" />
+              <Text style={styles.emptyStateText}>{i18n.t('noMessages') || 'No messages yet'}</Text>
+              <Text style={styles.emptyStateSubtext}>{i18n.t('messagesWillAppearAfterStart') || 'Messages will appear here once the conversation starts.'}</Text>
             </View>
           }
         />
@@ -165,13 +194,16 @@ export default function ClinicChatScreen() {
           onChangeText={setInput}
           placeholder={i18n.t('typeMessage') || 'Type a message...'}
           placeholderTextColor="#aaa"
+          editable={!sending}
+          onSubmitEditing={handleSendMessage}
+          blurOnSubmit={true}
         />
         <TouchableOpacity 
-          style={styles.sendBtn} 
+          style={[styles.sendBtn, (loading || !conversationIdState || sending || !input.trim()) && styles.sendBtnDisabled]} 
           onPress={handleSendMessage}
-          disabled={loading || !conversationIdState}
+          disabled={loading || !conversationIdState || sending || !input.trim()}
         >
-          <Text style={styles.sendBtnText}>{i18n.t('send') || 'Send'}</Text>
+          <Ionicons name="send" size={18} color="#fff" />
         </TouchableOpacity>
       </View>
       <Image source={require('../assets/forsa-logo.png')} style={styles.forsaLogo} />
@@ -181,7 +213,7 @@ export default function ClinicChatScreen() {
 
 const styles = StyleSheet.create({
   headerBar: {
-    backgroundColor: '#000',
+    backgroundColor: '#000000',
     paddingTop: Platform.OS === 'ios' ? 60 : 40,
     paddingBottom: 16,
     paddingHorizontal: 16,
@@ -202,13 +234,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerTitle: {
+  headerTitleWrap: {
     flex: 1,
+    marginHorizontal: 12,
+    alignItems: 'center',
+  },
+  headerTitle: {
     color: '#fff',
     fontSize: 20,
     fontWeight: 'bold',
     textAlign: 'center',
-    marginHorizontal: 12,
+  },
+  headerSubtitle: {
+    color: 'rgba(255,255,255,0.72)',
+    fontSize: 12,
+    marginTop: 2,
+    textAlign: 'center',
   },
   hamburgerBtn: {
     width: 44,
@@ -218,26 +259,77 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  chatList: {
+    flex: 1,
+    backgroundColor: '#f5f5f5',
+  },
+  emptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 56,
+    flex: 1,
+  },
+  emptyStateText: {
+    marginTop: 12,
+    color: '#374151',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  emptyStateSubtext: {
+    marginTop: 6,
+    color: '#6b7280',
+    fontSize: 13,
+    textAlign: 'center',
+  },
+  messageRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    marginBottom: 8,
+  },
+  messageRowSent: {
+    justifyContent: 'flex-end',
+  },
+  messageRowReceived: {
+    justifyContent: 'flex-start',
+  },
+  messageAvatar: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#e5e5e5',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 8,
+    marginBottom: 8,
+  },
+  messageAvatarImage: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    marginRight: 8,
+    marginBottom: 8,
+  },
   messageBubble: {
-    maxWidth: '80%',
-    borderRadius: 18,
+    maxWidth: '78%',
+    borderRadius: 20,
     paddingVertical: 12,
-    paddingHorizontal: 16,
-    marginVertical: 6,
-    shadowColor: '#000',
+    paddingHorizontal: 14,
+    shadowColor: '#000000',
     shadowOpacity: 0.06,
-    shadowRadius: 4,
+    shadowRadius: 8,
     elevation: 2,
   },
   myMessage: {
-    backgroundColor: '#000',
+    backgroundColor: '#000000',
     alignSelf: 'flex-end',
-    borderTopRightRadius: 4,
+    borderTopRightRadius: 6,
   },
   systemMessage: {
-    backgroundColor: '#eee',
+    backgroundColor: '#fff',
     alignSelf: 'flex-start',
-    borderTopLeftRadius: 4,
+    borderTopLeftRadius: 6,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
   },
   myMessageText: {
     color: '#fff',
@@ -254,37 +346,58 @@ const styles = StyleSheet.create({
   inputRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: '#fff',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    backgroundColor: 'rgba(255,255,255,0.98)',
     borderTopWidth: 1,
-    borderColor: '#eee',
+    borderColor: '#dcdcdc',
     zIndex: 10,
+    shadowColor: '#000000',
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    elevation: 6,
   },
   input: {
     flex: 1,
-    borderWidth: 2,
-    borderColor: '#111',
-    borderRadius: 16,
-    padding: 12,
+    borderWidth: 1,
+    borderColor: '#d9d9d9',
+    borderRadius: 24,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
     fontSize: 16,
-    backgroundColor: '#fff',
+    backgroundColor: '#f5f5f5',
     color: '#111',
-    marginRight: 8,
+    marginRight: 10,
   },
   sendBtn: {
-    backgroundColor: '#000',
-    borderRadius: 16,
-    paddingVertical: 10,
-    paddingHorizontal: 18,
+    width: 48,
+    height: 48,
+    backgroundColor: '#000000',
+    borderRadius: 24,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  sendBtnDisabled: {
+    opacity: 0.55,
   },
   sendBtnText: {
     color: '#fff',
     fontWeight: 'bold',
     fontSize: 16,
   },
+  messageMetaSent: {
+    marginTop: 6,
+    color: 'rgba(255,255,255,0.75)',
+    fontSize: 11,
+    textAlign: 'right',
+  },
+  messageMetaReceived: {
+    marginTop: 6,
+    color: '#6b7280',
+    fontSize: 11,
+    textAlign: 'left',
+  },
   forsaLogo: { position: 'absolute', bottom: 18, left: '50%', transform: [{ translateX: -24 }], width: 48, height: 48, opacity: 0.18, zIndex: 1 },
 });
+
 

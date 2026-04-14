@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, FlatList, StyleSheet, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -6,290 +6,252 @@ import { subscribeAdminCheckIns, CheckIn, CheckInFilters } from '../../services/
 import { isAdmin } from '../../services/ModerationService';
 import { formatTimestamp } from '../../lib/dateUtils';
 
+const C = {
+  bg: '#f0f4f8', card: '#ffffff', border: '#e2e8f0',
+  text: '#1e293b', subtext: '#64748b', muted: '#94a3b8',
+  blue: '#2563eb', blueLight: '#eff6ff',
+  green: '#16a34a', greenLight: '#f0fdf4',
+  amber: '#d97706', amberLight: '#fffbeb',
+};
+
+const FilterChip = ({
+  label,
+  active,
+  onPress,
+}: {
+  label: string;
+  active: boolean;
+  onPress: () => void;
+}) => (
+  <TouchableOpacity style={[S.filterChip, active && S.filterChipActive]} onPress={onPress} activeOpacity={0.8}>
+    <Text style={[S.filterChipText, active && S.filterChipTextActive]}>{label}</Text>
+  </TouchableOpacity>
+);
+
 export default function AdminCheckInsScreen() {
-    const [checkIns, setCheckIns] = useState<CheckIn[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [todayOnly, setTodayOnly] = useState(false);
-    const [locationFilter, setLocationFilter] = useState<'academy' | 'clinic' | null>(null);
-    const [isUserAdmin, setIsUserAdmin] = useState(false);
-    const router = useRouter();
+  const [checkIns, setCheckIns] = useState<CheckIn[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [todayOnly, setTodayOnly] = useState(false);
+  const [locationFilter, setLocationFilter] = useState<'academy' | 'clinic' | null>(null);
+  const [isUserAdmin, setIsUserAdmin] = useState(false);
+  const router = useRouter();
 
-    useEffect(() => {
-        checkAdminAccess();
-    }, []);
+  useEffect(() => {
+    checkAdminAccess();
+  }, []);
 
-    useEffect(() => {
-        if (!isUserAdmin) return;
+  useEffect(() => {
+    if (!isUserAdmin) return;
 
-        setLoading(true);
-        const filters: CheckInFilters = {
-            todayOnly: todayOnly || undefined,
-            locationRole: locationFilter || undefined,
-        };
-
-        const unsubscribe = subscribeAdminCheckIns(filters, (checkInsData) => {
-            setCheckIns(checkInsData);
-            setLoading(false);
-        });
-
-        return () => unsubscribe();
-    }, [todayOnly, locationFilter, isUserAdmin]);
-
-    const checkAdminAccess = async () => {
-        try {
-            const admin = await isAdmin();
-            setIsUserAdmin(admin);
-            if (!admin) {
-                Alert.alert('Access Denied', 'You must be an admin to access this screen.');
-                router.back();
-            }
-        } catch (error) {
-            console.error('Error checking admin status:', error);
-            Alert.alert('Error', 'Failed to verify permissions');
-            router.back();
-        }
+    setLoading(true);
+    const filters: CheckInFilters = {
+      todayOnly: todayOnly || undefined,
+      locationRole: locationFilter || undefined,
     };
 
-    const formatDate = (timestamp: unknown) =>
-        formatTimestamp(timestamp, { withTime: true, fallback: 'Unknown' });
+    const unsubscribe = subscribeAdminCheckIns(filters, (checkInsData) => {
+      setCheckIns(checkInsData);
+      setLoading(false);
+    });
 
-    const renderItem = ({ item }: { item: CheckIn }) => (
-        <View style={styles.card}>
-            <View style={styles.header}>
-                <View style={styles.headerLeft}>
-                    <Ionicons
-                        name={item.locationRole === 'academy' ? 'school' : 'medical'}
-                        size={24}
-                        color={item.locationRole === 'academy' ? '#4e73df' : '#1cc88a'}
-                    />
-                    <View style={styles.userInfo}>
-                        <Text style={styles.userName}>
-                            {item.userName || `User ${item.userId.substring(0, 8)}`}
-                        </Text>
-                        <Text style={styles.userRole}>
-                            {item.userRole === 'player' ? 'Player' : 'Parent'}
-                        </Text>
-                    </View>
-                </View>
-                <View style={[styles.locationBadge, item.locationRole === 'academy' ? styles.academyBadge : styles.clinicBadge]}>
-                    <Text style={styles.locationBadgeText}>
-                        {item.locationRole === 'academy' ? 'Academy' : 'Clinic'}
-                    </Text>
-                </View>
-            </View>
-            
-            <View style={styles.details}>
-                <View style={styles.detailRow}>
-                    <Ionicons name="location-outline" size={16} color="#666" />
-                    <Text style={styles.detailText}>
-                        {item.locationName || `Location ${item.locationId.substring(0, 8)}`}
-                    </Text>
-                </View>
-                <View style={styles.detailRow}>
-                    <Ionicons name="time-outline" size={16} color="#666" />
-                    <Text style={styles.detailText}>{formatDate(item.createdAt)}</Text>
-                </View>
-                <View style={styles.detailRow}>
-                    <Ionicons name="qr-code-outline" size={16} color="#666" />
-                    <Text style={styles.codeText}>{item.userCheckInCode}</Text>
-                </View>
-            </View>
-        </View>
-    );
+    return () => unsubscribe();
+  }, [todayOnly, locationFilter, isUserAdmin]);
 
-    if (!isUserAdmin) {
-        return (
-            <View style={styles.container}>
-                <View style={styles.loadingContainer}>
-                    <ActivityIndicator size="large" color="#007AFF" />
-                    <Text style={styles.loadingText}>Checking permissions...</Text>
-                </View>
-            </View>
-        );
+  const checkAdminAccess = async () => {
+    try {
+      const admin = await isAdmin();
+      setIsUserAdmin(admin);
+      if (!admin) {
+        Alert.alert('Access Denied', 'You must be an admin to access this screen.');
+        router.back();
+      }
+    } catch (error) {
+      console.error('Error checking admin status:', error);
+      Alert.alert('Error', 'Failed to verify permissions');
+      router.back();
     }
+  };
+
+  const formatDate = (timestamp: unknown) =>
+    formatTimestamp(timestamp, { withTime: true, fallback: 'Unknown' });
+
+  const counts = useMemo(() => {
+    const academy = checkIns.filter((x) => x.locationRole === 'academy').length;
+    const clinic = checkIns.filter((x) => x.locationRole === 'clinic').length;
+    return { total: checkIns.length, academy, clinic };
+  }, [checkIns]);
+
+  const renderItem = ({ item }: { item: CheckIn }) => {
+    const isAcademy = item.locationRole === 'academy';
+    const accent = isAcademy ? C.blue : C.green;
 
     return (
-        <View style={styles.container}>
-            <View style={styles.filters}>
-                <TouchableOpacity
-                    style={[styles.filterButton, todayOnly && styles.filterButtonActive]}
-                    onPress={() => setTodayOnly(!todayOnly)}
-                >
-                    <Text style={[styles.filterText, todayOnly && styles.filterTextActive]}>
-                        Today Only
-                    </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                    style={[styles.filterButton, locationFilter === 'academy' && styles.filterButtonActive]}
-                    onPress={() => setLocationFilter(locationFilter === 'academy' ? null : 'academy')}
-                >
-                    <Text style={[styles.filterText, locationFilter === 'academy' && styles.filterTextActive]}>
-                        Academy
-                    </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                    style={[styles.filterButton, locationFilter === 'clinic' && styles.filterButtonActive]}
-                    onPress={() => setLocationFilter(locationFilter === 'clinic' ? null : 'clinic')}
-                >
-                    <Text style={[styles.filterText, locationFilter === 'clinic' && styles.filterTextActive]}>
-                        Clinic
-                    </Text>
-                </TouchableOpacity>
+      <View style={S.card}>
+        <View style={[S.cardAccent, { backgroundColor: accent }]} />
+        <View style={S.cardHeader}>
+          <View style={S.personBlock}>
+            <View style={[S.iconCircle, { backgroundColor: (isAcademy ? C.blueLight : C.greenLight) }]}>
+              <Ionicons
+                name={isAcademy ? 'school' : 'medkit'}
+                size={18}
+                color={accent}
+              />
             </View>
-
-            {loading ? (
-                <View style={styles.loadingContainer}>
-                    <ActivityIndicator size="large" color="#007AFF" />
-                    <Text style={styles.loadingText}>Loading check-ins...</Text>
-                </View>
-            ) : checkIns.length === 0 ? (
-                <View style={styles.emptyContainer}>
-                    <Ionicons name="qr-code-outline" size={64} color="#ccc" />
-                    <Text style={styles.emptyText}>No check-ins found</Text>
-                </View>
-            ) : (
-                <FlatList
-                    data={checkIns}
-                    keyExtractor={item => item.id}
-                    renderItem={renderItem}
-                    contentContainerStyle={styles.list}
-                />
-            )}
+            <View style={{ flex: 1 }}>
+              <Text style={S.userName} numberOfLines={1}>
+                {item.userName || `User ${item.userId.substring(0, 8)}`}
+              </Text>
+              <Text style={S.userRole}>{item.userRole === 'player' ? 'Player' : 'Parent'}</Text>
+            </View>
+          </View>
+          <View style={[S.badge, { backgroundColor: isAcademy ? C.blueLight : C.greenLight }]}>
+            <Text style={[S.badgeText, { color: accent }]}>{isAcademy ? 'Academy' : 'Clinic'}</Text>
+          </View>
         </View>
+
+        <View style={S.details}>
+          <View style={S.detailRow}>
+            <Ionicons name="location-outline" size={15} color={C.subtext} />
+            <Text style={S.detailText}>{item.locationName || `Location ${item.locationId.substring(0, 8)}`}</Text>
+          </View>
+          <View style={S.detailRow}>
+            <Ionicons name="time-outline" size={15} color={C.subtext} />
+            <Text style={S.detailText}>{formatDate(item.createdAt)}</Text>
+          </View>
+          <View style={S.detailRow}>
+            <Ionicons name="qr-code-outline" size={15} color={C.subtext} />
+            <Text style={S.codeText}>{item.userCheckInCode}</Text>
+          </View>
+        </View>
+      </View>
     );
+  };
+
+  if (!isUserAdmin) {
+    return (
+      <View style={S.container}>
+        <View style={S.center}>
+          <ActivityIndicator size="large" color={C.blue} />
+          <Text style={S.loadingText}>Checking permissions...</Text>
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <View style={S.container}>
+      <View style={S.header}>
+        <Text style={S.headerTitle}>Check-ins</Text>
+        <Text style={S.headerSub}>Track all check-ins across academies and clinics</Text>
+      </View>
+
+      <View style={S.summaryRow}>
+        <View style={S.summaryCard}>
+          <Text style={S.summaryLabel}>Total</Text>
+          <Text style={S.summaryValue}>{counts.total}</Text>
+        </View>
+        <View style={S.summaryCard}>
+          <Text style={S.summaryLabel}>Academy</Text>
+          <Text style={[S.summaryValue, { color: C.blue }]}>{counts.academy}</Text>
+        </View>
+        <View style={S.summaryCard}>
+          <Text style={S.summaryLabel}>Clinic</Text>
+          <Text style={[S.summaryValue, { color: C.green }]}>{counts.clinic}</Text>
+        </View>
+      </View>
+
+      <View style={S.filters}>
+        <FilterChip label="Today Only" active={todayOnly} onPress={() => setTodayOnly(!todayOnly)} />
+        <FilterChip label="Academy" active={locationFilter === 'academy'} onPress={() => setLocationFilter(locationFilter === 'academy' ? null : 'academy')} />
+        <FilterChip label="Clinic" active={locationFilter === 'clinic'} onPress={() => setLocationFilter(locationFilter === 'clinic' ? null : 'clinic')} />
+      </View>
+
+      {loading ? (
+        <View style={S.center}>
+          <ActivityIndicator size="large" color={C.blue} />
+          <Text style={S.loadingText}>Loading check-ins...</Text>
+        </View>
+      ) : checkIns.length === 0 ? (
+        <View style={S.center}>
+          <View style={S.emptyIcon}>
+            <Ionicons name="qr-code-outline" size={32} color={C.muted} />
+          </View>
+          <Text style={S.emptyTitle}>No check-ins found</Text>
+          <Text style={S.emptySub}>Try turning off filters to view more records.</Text>
+        </View>
+      ) : (
+        <FlatList
+          data={checkIns}
+          keyExtractor={(item) => item.id}
+          renderItem={renderItem}
+          contentContainerStyle={S.list}
+        />
+      )}
+    </View>
+  );
 }
 
-const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#f5f5f5',
-    },
-    filters: {
-        flexDirection: 'row',
-        padding: 16,
-        gap: 12,
-        backgroundColor: '#fff',
-        borderBottomWidth: 1,
-        borderBottomColor: '#e0e0e0',
-    },
-    filterButton: {
-        paddingVertical: 8,
-        paddingHorizontal: 16,
-        borderRadius: 20,
-        backgroundColor: '#f0f0f0',
-        borderWidth: 1,
-        borderColor: '#e0e0e0',
-    },
-    filterButtonActive: {
-        backgroundColor: '#007AFF',
-        borderColor: '#007AFF',
-    },
-    filterText: {
-        fontSize: 14,
-        color: '#666',
-        fontWeight: '500',
-    },
-    filterTextActive: {
-        color: '#fff',
-        fontWeight: '600',
-    },
-    loadingContainer: {
-        flex: 1,
-        justifyContent: 'center',
-        alignItems: 'center',
-        paddingVertical: 60,
-    },
-    loadingText: {
-        marginTop: 12,
-        fontSize: 14,
-        color: '#666',
-    },
-    emptyContainer: {
-        flex: 1,
-        justifyContent: 'center',
-        alignItems: 'center',
-        paddingVertical: 60,
-    },
-    emptyText: {
-        marginTop: 16,
-        fontSize: 16,
-        color: '#999',
-    },
-    list: {
-        padding: 16,
-    },
-    card: {
-        backgroundColor: '#fff',
-        borderRadius: 12,
-        padding: 16,
-        marginBottom: 12,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 4,
-        elevation: 3,
-    },
-    header: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'flex-start',
-        marginBottom: 12,
-    },
-    headerLeft: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 12,
-        flex: 1,
-    },
-    userInfo: {
-        flex: 1,
-    },
-    userName: {
-        fontSize: 16,
-        fontWeight: '600',
-        color: '#333',
-        marginBottom: 4,
-    },
-    userRole: {
-        fontSize: 12,
-        color: '#666',
-        textTransform: 'capitalize',
-    },
-    locationBadge: {
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-        borderRadius: 16,
-    },
-    academyBadge: {
-        backgroundColor: '#e3f2fd',
-    },
-    clinicBadge: {
-        backgroundColor: '#e8f5e9',
-    },
-    locationBadgeText: {
-        fontSize: 12,
-        fontWeight: '600',
-        color: '#333',
-    },
-    details: {
-        gap: 8,
-        paddingTop: 12,
-        borderTopWidth: 1,
-        borderTopColor: '#f0f0f0',
-    },
-    detailRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-    },
-    detailText: {
-        fontSize: 14,
-        color: '#666',
-    },
-    codeText: {
-        fontSize: 14,
-        color: '#007AFF',
-        fontWeight: '600',
-        fontFamily: 'monospace',
-    },
+const S = StyleSheet.create({
+  container: { flex: 1, backgroundColor: C.bg },
+  header: { paddingHorizontal: 16, paddingTop: 56, paddingBottom: 10 },
+  headerTitle: { fontSize: 22, fontWeight: '800', color: C.text },
+  headerSub: { fontSize: 13, color: C.subtext, marginTop: 2 },
+
+  summaryRow: { flexDirection: 'row', gap: 10, paddingHorizontal: 16, marginBottom: 10 },
+  summaryCard: {
+    flex: 1,
+    backgroundColor: C.card,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: C.border,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+  },
+  summaryLabel: { fontSize: 11, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5 },
+  summaryValue: { fontSize: 18, fontWeight: '800', color: C.text, marginTop: 2 },
+
+  filters: { flexDirection: 'row', gap: 10, paddingHorizontal: 16, marginBottom: 6 },
+  filterChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: C.border,
+    backgroundColor: C.card,
+  },
+  filterChipActive: {
+    backgroundColor: C.text,
+    borderColor: C.text,
+  },
+  filterChipText: { fontSize: 12, color: C.subtext, fontWeight: '700' },
+  filterChipTextActive: { color: '#fff' },
+
+  list: { padding: 16, paddingBottom: 30 },
+  card: {
+    backgroundColor: C.card,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: C.border,
+    marginBottom: 10,
+    overflow: 'hidden',
+  },
+  cardAccent: { height: 3, width: '100%' },
+  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 14, paddingBottom: 10 },
+  personBlock: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
+  iconCircle: { width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
+  userName: { fontSize: 15, fontWeight: '800', color: C.text },
+  userRole: { fontSize: 12, color: C.subtext, marginTop: 1 },
+  badge: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5 },
+  badgeText: { fontSize: 10, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.4 },
+
+  details: { borderTopWidth: 1, borderTopColor: C.border, padding: 14, gap: 8 },
+  detailRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  detailText: { fontSize: 13, color: C.subtext, flex: 1 },
+  codeText: { fontSize: 13, color: C.blue, fontWeight: '700' },
+
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24 },
+  loadingText: { marginTop: 10, color: C.subtext, fontSize: 14 },
+  emptyIcon: { width: 64, height: 64, borderRadius: 32, backgroundColor: C.border, justifyContent: 'center', alignItems: 'center' },
+  emptyTitle: { marginTop: 12, fontSize: 16, fontWeight: '700', color: C.text },
+  emptySub: { marginTop: 4, color: C.subtext, textAlign: 'center' },
 });

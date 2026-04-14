@@ -8,6 +8,7 @@ import { Video, ResizeMode } from 'expo-av';
 import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import PostActionsMenu from '../components/PostActionsMenu';
+import ZoomableFeedMedia from '../components/feed/ZoomableFeedMedia';
 import i18n from '../locales/i18n';
 import { auth } from '../lib/firebase';
 
@@ -20,6 +21,8 @@ export default function AcademyFeedScreen() {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const [academyPosts, setAcademyPosts] = useState<any[]>([]);
   const [adminPosts, setAdminPosts] = useState<any[]>([]);
+  const [academyPostsReady, setAcademyPostsReady] = useState(false);
+  const [adminPostsReady, setAdminPostsReady] = useState(false);
 
   // Merge academy posts and admin posts (deduplicate by post ID)
   React.useEffect(() => {
@@ -53,7 +56,15 @@ export default function AcademyFeedScreen() {
   }, []);
 
   React.useEffect(() => {
+    if (academyPostsReady && adminPostsReady) {
+      setLoading(false);
+    }
+  }, [academyPostsReady, adminPostsReady]);
+
+  React.useEffect(() => {
     setLoading(true);
+    setAcademyPostsReady(false);
+    setAdminPostsReady(false);
     
     // Check if user is authenticated before setting up listener
     const user = auth.currentUser;
@@ -83,6 +94,8 @@ export default function AcademyFeedScreen() {
       where('ownerRole', '==', 'admin')
     );
 
+    let fallbackUnsubscribe: (() => void) | null = null;
+
     // Set up real-time listeners for both queries
     const unsubscribe = onSnapshot(
       q,
@@ -90,6 +103,7 @@ export default function AcademyFeedScreen() {
         // Check authentication before processing
         if (!auth.currentUser) {
           setAcademyPosts([]);
+          setAcademyPostsReady(true);
           setLoading(false);
           return;
         }
@@ -100,11 +114,13 @@ export default function AcademyFeedScreen() {
           type: doc.data().ownerRole || 'unknown'
         }));
         setAcademyPosts(posts);
+        setAcademyPostsReady(true);
       },
       (error) => {
         // Check if user is still authenticated before attempting fallback
         if (!auth.currentUser) {
           setFeed([]);
+          setAcademyPostsReady(true);
           setLoading(false);
           return;
         }
@@ -113,6 +129,7 @@ export default function AcademyFeedScreen() {
         if (error.code === 'permission-denied' || error.message?.includes('permission')) {
           // Silently handle permission errors (user likely logged out)
           setAcademyPosts([]);
+          setAcademyPostsReady(true);
           setLoading(false);
           return;
         }
@@ -124,8 +141,7 @@ export default function AcademyFeedScreen() {
           where('visibleToRoles', 'array-contains', 'academy'),
           orderBy('timestamp', 'desc')
         );
-        
-        let fallbackUnsubscribe: (() => void) | null = null;
+
         fallbackUnsubscribe = onSnapshot(
           fallbackQ,
           (snapshot) => {
@@ -133,6 +149,7 @@ export default function AcademyFeedScreen() {
             if (!auth.currentUser) {
               if (fallbackUnsubscribe) fallbackUnsubscribe();
               setAcademyPosts([]);
+              setAcademyPostsReady(true);
               setLoading(false);
               return;
             }
@@ -145,6 +162,7 @@ export default function AcademyFeedScreen() {
               }))
               .filter((post: any) => !post.status || post.status === 'active');
             setAcademyPosts(posts);
+            setAcademyPostsReady(true);
           },
           (fallbackError) => {
             // Check if error is due to permissions
@@ -152,10 +170,12 @@ export default function AcademyFeedScreen() {
               // Silently handle permission errors
               if (fallbackUnsubscribe) fallbackUnsubscribe();
               setAcademyPosts([]);
+              setAcademyPostsReady(true);
               return;
             }
             console.error('Academy feed fallback error:', fallbackError);
             setAcademyPosts([]);
+            setAcademyPostsReady(true);
           }
         );
       }
@@ -167,6 +187,7 @@ export default function AcademyFeedScreen() {
       (querySnapshot) => {
         if (!auth.currentUser) {
           setAdminPosts([]);
+          setAdminPostsReady(true);
           return;
         }
         
@@ -183,31 +204,32 @@ export default function AcademyFeedScreen() {
             return getTs(b) - getTs(a);
           });
         setAdminPosts(posts);
+        setAdminPostsReady(true);
       },
       async (error) => {
         if (!auth.currentUser) {
           setAdminPosts([]);
+          setAdminPostsReady(true);
           return;
         }
         
         if (error.code === 'permission-denied' || error.message?.includes('permission')) {
           setAdminPosts([]);
+          setAdminPostsReady(true);
           return;
         }
         
         console.error('Academy feed (admin) error:', error?.message);
         setAdminPosts([]);
+        setAdminPostsReady(true);
       }
     );
-
-    // Stop loading after both queries have run
-    const t = setTimeout(() => setLoading(false), 800);
 
     // Cleanup listeners on unmount
     return () => {
       unsubscribe();
       unsubscribeAdmin();
-      clearTimeout(t);
+      if (fallbackUnsubscribe) fallbackUnsubscribe();
     };
   }, []);
 
@@ -259,33 +281,7 @@ export default function AcademyFeedScreen() {
           </View>
         </View>
         
-        {/* Media display */}
-        {item.mediaUrl && (
-          <View style={styles.mediaContainer}>
-            {item.mediaType === 'video' ? (
-              <Video
-                source={{ uri: item.mediaUrl }}
-                style={styles.mediaVideo}
-                useNativeControls
-                resizeMode={ResizeMode.CONTAIN}
-                isLooping={false}
-              />
-            ) : (
-              <Image 
-                source={{ uri: item.mediaUrl }} 
-                style={styles.mediaImage}
-                resizeMode="cover"
-              />
-            )}
-            <TouchableOpacity
-              style={styles.fullScreenButton}
-              onPress={() => setFullScreenMedia({ uri: item.mediaUrl, type: item.mediaType === 'video' ? 'video' : 'image' })}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="expand" size={24} color="#fff" />
-            </TouchableOpacity>
-          </View>
-        )}
+        <ZoomableFeedMedia post={item} />
         
         <Text style={styles.feedContent}>{item.content || ''}</Text>
       </View>
@@ -330,6 +326,10 @@ export default function AcademyFeedScreen() {
           keyExtractor={item => item.id}
               contentContainerStyle={styles.feedList}
               showsVerticalScrollIndicator={false}
+              initialNumToRender={5}
+              maxToRenderPerBatch={6}
+              windowSize={7}
+              removeClippedSubviews={Platform.OS === 'android'}
         />
       )}
         </Animated.View>

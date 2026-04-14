@@ -9,57 +9,72 @@ const SplashScreen = () => {
   const router = useRouter();
 
   useEffect(() => {
+    let isMounted = true;
+    let welcomeTimer: ReturnType<typeof setTimeout> | null = null;
+
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (!isMounted) return;
+
+      if (welcomeTimer) {
+        clearTimeout(welcomeTimer);
+        welcomeTimer = null;
+      }
+
       if (user) {
-        // User is signed in, get their role from Firestore
         try {
           const userDoc = await getDoc(doc(db, 'users', user.uid));
-          if (userDoc.exists()) {
-            const userData = userDoc.data();
-            const role = (userData?.role || '').toLowerCase();
+          const userData = userDoc.exists() ? userDoc.data() : {};
+          const role = String(userData?.role || '').toLowerCase();
+          const isSuspended = userData?.isSuspended === true || String(userData?.status || '').toLowerCase() === 'suspended';
 
-            if (userData?.isSuspended === true) {
-              router.replace('/account-suspended');
+          if (isSuspended) {
+            router.replace('/account-suspended');
+            return;
+          }
+
+          switch (role) {
+            case 'admin':
+              router.replace('/(admin)/dashboard');
               return;
-            }
-
-            switch (role) {
-              case 'admin':
-                router.replace('/(admin)/dashboard');
-                return;
-              case 'player':
-                router.replace('/player-feed');
-                return;
-              case 'agent':
-                router.replace('/agent-feed');
-                return;
-              case 'academy':
-                router.replace('/academy-feed');
-                return;
-              case 'parent':
-                router.replace('/parent-feed');
-                return;
-              case 'clinic':
-                router.replace('/clinic-feed');
-                return;
-              default:
-                router.replace('/player-feed');
-                return;
-            }
+            case 'player':
+              router.replace('/player-feed');
+              return;
+            case 'agent':
+              router.replace('/agent-feed');
+              return;
+            case 'academy':
+              router.replace('/academy-feed');
+              return;
+            case 'parent':
+              router.replace('/parent-feed');
+              return;
+            case 'clinic':
+              router.replace('/clinic-feed');
+              return;
+            default:
+              router.replace('/player-feed');
+              return;
           }
         } catch (error) {
           console.error('Error fetching user role:', error);
+          router.replace('/welcome');
+          return;
         }
       }
 
-      // Not logged in → go to welcome after splash delay
-      setTimeout(() => {
-        router.replace('/welcome');
+      welcomeTimer = setTimeout(() => {
+        if (isMounted) {
+          router.replace('/welcome');
+        }
       }, 2500);
     });
 
-    return () => unsubscribe();
-  }, []);
+    return () => {
+      isMounted = false;
+      if (welcomeTimer) clearTimeout(welcomeTimer);
+      unsubscribe();
+    };
+  }, [router]);
 
   return (
     <View style={styles.container}>

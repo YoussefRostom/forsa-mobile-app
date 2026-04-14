@@ -22,10 +22,12 @@ export default function AgentEditProfileScreen() {
   const [phone, setPhone] = useState('');
   const [agency, setAgency] = useState('');
   const [license, setLicense] = useState('');
+  const [description, setDescription] = useState('');
   const [city, setCity] = useState('');
   const [cityModal, setCityModal] = useState(false);
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
   const [profilePhotoUrl, setProfilePhotoUrl] = useState<string | null>(null);
+  const [initialProfileState, setInitialProfileState] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -45,6 +47,18 @@ export default function AgentEditProfileScreen() {
     try {
       const user = auth.currentUser;
       if (!user) {
+        setInitialProfileState(JSON.stringify({
+          firstName: '',
+          lastName: '',
+          email: '',
+          phone: '',
+          agency: '',
+          license: '',
+          description: '',
+          city: '',
+          profilePhoto: '',
+          profilePhotoUrl: '',
+        }));
         setLoading(false);
         return;
       }
@@ -55,34 +69,93 @@ export default function AgentEditProfileScreen() {
 
       if (docSnap.exists()) {
         const data = docSnap.data();
-        setFirstName(data.firstName || '');
-        setLastName(data.lastName || '');
-        setEmail(data.email || '');
-        setPhone(data.phone || '');
-        setAgency(data.agency || '');
-        setLicense(data.license || '');
-        setCity(data.city || '');
-        if (data.profilePhoto) {
-          setProfilePhoto(data.profilePhoto);
-          setProfilePhotoUrl(data.profilePhoto);
+        const nextFirstName = data.firstName || '';
+        const nextLastName = data.lastName || '';
+        const nextEmail = data.email || '';
+        const nextPhone = data.phone || '';
+        const nextAgency = data.agency || '';
+        const nextLicense = data.license || '';
+        const nextDescription = data.description || '';
+        const nextCity = data.city || '';
+        const nextPhoto = data.profilePhoto || '';
+
+        setFirstName(nextFirstName);
+        setLastName(nextLastName);
+        setEmail(nextEmail);
+        setPhone(nextPhone);
+        setAgency(nextAgency);
+        setLicense(nextLicense);
+        setDescription(nextDescription);
+        setCity(nextCity);
+        if (nextPhoto) {
+          setProfilePhoto(nextPhoto);
+          setProfilePhotoUrl(nextPhoto);
         }
+        setInitialProfileState(JSON.stringify({
+          firstName: nextFirstName.trim(),
+          lastName: nextLastName.trim(),
+          email: nextEmail.trim(),
+          phone: nextPhone.trim(),
+          agency: nextAgency.trim(),
+          license: nextLicense.trim(),
+          description: nextDescription.trim(),
+          city: nextCity.trim(),
+          profilePhoto: nextPhoto.trim(),
+          profilePhotoUrl: nextPhoto.trim(),
+        }));
       } else {
         // Fallback to 'users' collection
         const userDocRef = doc(db, 'users', user.uid);
         const userDocSnap = await getDoc(userDocRef);
         if (userDocSnap.exists()) {
           const data = userDocSnap.data();
-          setFirstName(data.firstName || '');
-          setLastName(data.lastName || '');
-          setEmail(data.email || '');
-          setPhone(data.phone || '');
-          setAgency(data.agency || '');
-          setLicense(data.license || '');
-          setCity(data.city || '');
-          if (data.profilePhoto) {
-            setProfilePhoto(data.profilePhoto);
-            setProfilePhotoUrl(data.profilePhoto);
+          const nextFirstName = data.firstName || '';
+          const nextLastName = data.lastName || '';
+          const nextEmail = data.email || '';
+          const nextPhone = data.phone || '';
+          const nextAgency = data.agency || '';
+          const nextLicense = data.license || '';
+          const nextDescription = data.description || '';
+          const nextCity = data.city || '';
+          const nextPhoto = data.profilePhoto || '';
+
+          setFirstName(nextFirstName);
+          setLastName(nextLastName);
+          setEmail(nextEmail);
+          setPhone(nextPhone);
+          setAgency(nextAgency);
+          setLicense(nextLicense);
+          setDescription(nextDescription);
+          setCity(nextCity);
+          if (nextPhoto) {
+            setProfilePhoto(nextPhoto);
+            setProfilePhotoUrl(nextPhoto);
           }
+          setInitialProfileState(JSON.stringify({
+            firstName: nextFirstName.trim(),
+            lastName: nextLastName.trim(),
+            email: nextEmail.trim(),
+            phone: nextPhone.trim(),
+            agency: nextAgency.trim(),
+            license: nextLicense.trim(),
+            description: nextDescription.trim(),
+            city: nextCity.trim(),
+            profilePhoto: nextPhoto.trim(),
+            profilePhotoUrl: nextPhoto.trim(),
+          }));
+        } else {
+          setInitialProfileState(JSON.stringify({
+            firstName: '',
+            lastName: '',
+            email: '',
+            phone: '',
+            agency: '',
+            license: '',
+            description: '',
+            city: '',
+            profilePhoto: '',
+            profilePhotoUrl: '',
+          }));
         }
       }
     } catch (error) {
@@ -147,12 +220,30 @@ export default function AgentEditProfileScreen() {
       if (email && email.trim()) updateData.email = email.trim();
       if (agency && agency.trim()) updateData.agency = agency.trim();
       if (license && license.trim()) updateData.license = license.trim();
+      if (description.trim()) updateData.description = description.trim();
       if (city && city.trim()) updateData.city = city.trim();
       if (finalProfilePhotoUrl) updateData.profilePhoto = finalProfilePhotoUrl;
 
       // Update both collections
       await updateDoc(doc(db, 'agents', user.uid), updateData);
       await updateDoc(doc(db, 'users', user.uid), updateData);
+
+      if (finalProfilePhotoUrl) {
+        setProfilePhoto(finalProfilePhotoUrl);
+        setProfilePhotoUrl(finalProfilePhotoUrl);
+      }
+      setInitialProfileState(JSON.stringify({
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        email: email.trim(),
+        phone: phone.trim(),
+        agency: agency.trim(),
+        license: license.trim(),
+        description: description.trim(),
+        city: city.trim(),
+        profilePhoto: (finalProfilePhotoUrl || profilePhoto || '').trim(),
+        profilePhotoUrl: (finalProfilePhotoUrl || profilePhotoUrl || '').trim(),
+      }));
 
       Alert.alert(i18n.t('success'), i18n.t('profileUpdated') || 'Profile updated successfully');
       router.back();
@@ -171,6 +262,24 @@ export default function AgentEditProfileScreen() {
       </View>
     );
   }
+
+  const displayName = `${firstName || ''} ${lastName || ''}`.trim() || (i18n.t('agent') || 'Agent');
+  const completionFields = [firstName, lastName, email, agency, license, description, city, profilePhotoUrl || profilePhoto].filter(Boolean).length;
+  const completionPercent = Math.round((completionFields / 8) * 100);
+  const cityLabel = city ? cities.find(c => c.key === city)?.label || city : (i18n.t('selectCity') || 'Select City');
+  const currentProfileState = JSON.stringify({
+    firstName: firstName.trim(),
+    lastName: lastName.trim(),
+    email: email.trim(),
+    phone: phone.trim(),
+    agency: agency.trim(),
+    license: license.trim(),
+    description: description.trim(),
+    city: city.trim(),
+    profilePhoto: (profilePhoto || '').trim(),
+    profilePhotoUrl: (profilePhotoUrl || '').trim(),
+  });
+  const hasUnsavedChanges = initialProfileState !== '' && currentProfileState !== initialProfileState;
 
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -197,29 +306,41 @@ export default function AgentEditProfileScreen() {
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
           >
-            {/* Profile Photo */}
-            <View style={styles.profileSection}>
-              <TouchableOpacity onPress={handlePickPhoto} style={styles.profileImageContainer}>
-                {profilePhoto ? (
-                  <Image source={{ uri: profilePhoto }} style={styles.profileImage} />
-                ) : (
-                  <View style={styles.profileImagePlaceholder}>
-                    <Ionicons name="camera" size={32} color="#999" />
+            <View style={styles.heroCard}>
+              <View style={styles.heroTop}>
+                <TouchableOpacity onPress={handlePickPhoto} style={styles.profileImageContainer}>
+                  {profilePhoto ? (
+                    <Image source={{ uri: profilePhoto }} style={styles.profileImage} />
+                  ) : (
+                    <View style={styles.profileImagePlaceholder}>
+                      <Ionicons name="camera" size={30} color="#999" />
+                    </View>
+                  )}
+                  <View style={styles.profileImageOverlay}>
+                    <Ionicons name="camera" size={16} color="#fff" />
                   </View>
-                )}
-                <View style={styles.profileImageOverlay}>
-                  <Ionicons name="camera" size={20} color="#fff" />
+                </TouchableOpacity>
+                <View style={styles.heroTextWrap}>
+                  <Text style={styles.heroName}>{displayName}</Text>
+                  <Text style={styles.heroSub}>{agency?.trim() || (i18n.t('agentEditProfile') || 'Agent Profile')}</Text>
+                  <View style={styles.completionRow}>
+                    <View style={styles.completionTrack}>
+                      <View style={[styles.completionFill, { width: `${completionPercent}%` }]} />
+                    </View>
+                    <Text style={styles.completionText}>{completionPercent}%</Text>
+                  </View>
                 </View>
-              </TouchableOpacity>
-              <Text style={styles.profileLabel}>{i18n.t('uploadProfilePic') || 'Upload Profile Picture'}</Text>
+              </View>
+              <Text style={styles.profileLabel}>{i18n.t('uploadProfilePic') || 'Tap photo to update your profile picture'}</Text>
             </View>
 
-            {/* Form Card */}
             <View style={styles.formCard}>
+              <Text style={styles.sectionTitle}>Identity</Text>
+
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>{i18n.t('firstName')}</Text>
                 <View style={styles.inputWrapper}>
-                  <Ionicons name="person-outline" size={20} color="#999" style={styles.inputIcon} />
+                  <Ionicons name="person-outline" size={20} color="#777" style={styles.inputIcon} />
                   <TextInput
                     style={styles.input}
                     value={firstName}
@@ -233,7 +354,7 @@ export default function AgentEditProfileScreen() {
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>{i18n.t('lastName')}</Text>
                 <View style={styles.inputWrapper}>
-                  <Ionicons name="person-outline" size={20} color="#999" style={styles.inputIcon} />
+                  <Ionicons name="person-outline" size={20} color="#777" style={styles.inputIcon} />
                   <TextInput
                     style={styles.input}
                     value={lastName}
@@ -247,7 +368,7 @@ export default function AgentEditProfileScreen() {
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>{i18n.t('email')}</Text>
                 <View style={styles.inputWrapper}>
-                  <Ionicons name="mail-outline" size={20} color="#999" style={styles.inputIcon} />
+                  <Ionicons name="mail-outline" size={20} color="#777" style={styles.inputIcon} />
                   <TextInput
                     style={styles.input}
                     value={email}
@@ -262,23 +383,25 @@ export default function AgentEditProfileScreen() {
 
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>{i18n.t('phone')}</Text>
-                <View style={styles.inputWrapper}>
-                  <Ionicons name="call-outline" size={20} color="#999" style={styles.inputIcon} />
+                <View style={[styles.inputWrapper, styles.disabledInputWrapper]}>
+                  <Ionicons name="call-outline" size={20} color="#bbb" style={styles.inputIcon} />
                   <TextInput
-                    style={styles.input}
+                    style={[styles.input, styles.disabledInput]}
                     value={phone}
-                    onChangeText={setPhone}
+                    editable={false}
                     placeholder={i18n.t('phone')}
-                    placeholderTextColor="#999"
+                    placeholderTextColor="#bbb"
                     keyboardType="phone-pad"
                   />
                 </View>
               </View>
 
+              <Text style={styles.sectionTitle}>Professional</Text>
+
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>{i18n.t('agencyName')}</Text>
                 <View style={styles.inputWrapper}>
-                  <Ionicons name="business-outline" size={20} color="#999" style={styles.inputIcon} />
+                  <Ionicons name="business-outline" size={20} color="#777" style={styles.inputIcon} />
                   <TextInput
                     style={styles.input}
                     value={agency}
@@ -292,7 +415,7 @@ export default function AgentEditProfileScreen() {
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>{i18n.t('licenseNumber')}</Text>
                 <View style={styles.inputWrapper}>
-                  <Ionicons name="document-outline" size={20} color="#999" style={styles.inputIcon} />
+                  <Ionicons name="document-text-outline" size={20} color="#777" style={styles.inputIcon} />
                   <TextInput
                     style={styles.input}
                     value={license}
@@ -306,51 +429,80 @@ export default function AgentEditProfileScreen() {
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>{i18n.t('city')}</Text>
                 <TouchableOpacity style={styles.inputWrapper} onPress={() => setCityModal(true)}>
-                  <Ionicons name="location-outline" size={20} color="#999" style={styles.inputIcon} />
-                  <Text style={[styles.cityText, !city && styles.cityPlaceholder]}>
-                    {city ? cities.find(c => c.key === city)?.label || city : i18n.t('selectCity')}
-                  </Text>
-                  <Ionicons name="chevron-down" size={20} color="#999" />
+                  <Ionicons name="location-outline" size={20} color="#777" style={styles.inputIcon} />
+                  <Text style={[styles.cityText, !city && styles.cityPlaceholder]}>{cityLabel}</Text>
+                  <Ionicons name="chevron-down" size={20} color="#888" />
                 </TouchableOpacity>
-                <Modal visible={cityModal} transparent animationType="fade" onRequestClose={() => setCityModal(false)}>
-                  <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setCityModal(false)}>
-                    <View style={styles.modalContent}>
-                      <View style={styles.modalHeader}>
-                        <Text style={styles.modalTitle}>{i18n.t('selectCity')}</Text>
-                        <TouchableOpacity onPress={() => setCityModal(false)}>
-                          <Ionicons name="close" size={24} color="#000" />
-                        </TouchableOpacity>
-                      </View>
-                      <ScrollView style={styles.modalScrollView}>
-                        {cities.map((item) => (
-                          <TouchableOpacity
-                            key={item.key}
-                            style={[styles.cityOption, city === item.key && styles.cityOptionSelected]}
-                            onPress={() => {
-                              setCity(item.key);
-                              setCityModal(false);
-                            }}
-                          >
-                            <Text style={[styles.cityOptionText, city === item.key && styles.cityOptionTextSelected]}>
-                              {item.label}
-                            </Text>
-                            {city === item.key && <Ionicons name="checkmark" size={20} color="#fff" />}
-                          </TouchableOpacity>
-                        ))}
-                      </ScrollView>
-                    </View>
-                  </TouchableOpacity>
-                </Modal>
               </View>
+
+              <View style={styles.inputGroup}>
+                <View style={styles.bioLabelRow}>
+                  <Text style={styles.label}>{i18n.t('description') || 'Bio / Description'}</Text>
+                  <Text style={styles.bioCount}>{description.length}/220</Text>
+                </View>
+                <View style={[styles.inputWrapper, styles.textAreaWrapper]}>
+                  <TextInput
+                    style={[styles.input, styles.textArea]}
+                    value={description}
+                    onChangeText={setDescription}
+                    maxLength={220}
+                    placeholder={i18n.t('descriptionPlaceholder') || 'Tell players what makes you different...'}
+                    placeholderTextColor="#999"
+                    multiline
+                    numberOfLines={4}
+                    textAlignVertical="top"
+                  />
+                </View>
+              </View>
+
+              {hasUnsavedChanges && (
+                <View style={styles.unsavedBanner}>
+                  <Ionicons name="alert-circle-outline" size={16} color="#7c2d12" />
+                  <Text style={styles.unsavedBannerText}>{i18n.t('unsavedChangesHint') || 'Changes are not saved yet.'}</Text>
+                </View>
+              )}
 
               <TouchableOpacity style={[styles.saveBtn, saving && styles.saveBtnDisabled]} onPress={handleSave} disabled={saving}>
                 {saving ? (
                   <ActivityIndicator color="#fff" />
                 ) : (
-                  <Text style={styles.saveBtnText}>{i18n.t('save')}</Text>
+                  <>
+                    <Ionicons name="checkmark-circle-outline" size={18} color="#fff" style={{ marginRight: 8 }} />
+                    <Text style={styles.saveBtnText}>{i18n.t('save') || 'Save'}</Text>
+                  </>
                 )}
               </TouchableOpacity>
             </View>
+
+            <Modal visible={cityModal} transparent animationType="fade" onRequestClose={() => setCityModal(false)}>
+              <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setCityModal(false)}>
+                <View style={styles.modalContent}>
+                  <View style={styles.modalHeader}>
+                    <Text style={styles.modalTitle}>{i18n.t('selectCity') || 'Select City'}</Text>
+                    <TouchableOpacity onPress={() => setCityModal(false)}>
+                      <Ionicons name="close" size={24} color="#000" />
+                    </TouchableOpacity>
+                  </View>
+                  <ScrollView style={styles.modalScrollView}>
+                    {cities.map((item) => (
+                      <TouchableOpacity
+                        key={item.key}
+                        style={[styles.cityOption, city === item.key && styles.cityOptionSelected]}
+                        onPress={() => {
+                          setCity(item.key);
+                          setCityModal(false);
+                        }}
+                      >
+                        <Text style={[styles.cityOptionText, city === item.key && styles.cityOptionTextSelected]}>
+                          {item.label}
+                        </Text>
+                        {city === item.key && <Ionicons name="checkmark" size={20} color="#fff" />}
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+              </TouchableOpacity>
+            </Modal>
           </ScrollView>
         </Animated.View>
       </LinearGradient>
@@ -401,61 +553,120 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     paddingHorizontal: 24,
-    paddingBottom: 40,
+    paddingBottom: 48,
   },
-  profileSection: {
+  heroCard: {
+    borderRadius: 22,
+    overflow: 'hidden',
+    marginBottom: 18,
+    backgroundColor: '#fff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  heroTop: {
+    backgroundColor: '#111',
+    padding: 16,
+    flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 24,
+  },
+  heroTextWrap: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  heroName: {
+    color: '#fff',
+    fontSize: 22,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  heroSub: {
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 13,
+    marginBottom: 10,
+  },
+  completionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  completionTrack: {
+    flex: 1,
+    height: 7,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    overflow: 'hidden',
+    marginRight: 8,
+  },
+  completionFill: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: '#34d399',
+  },
+  completionText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
   },
   profileImageContainer: {
     position: 'relative',
-    marginBottom: 12,
   },
   profileImage: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    borderWidth: 4,
+    width: 98,
+    height: 98,
+    borderRadius: 49,
+    borderWidth: 3,
     borderColor: '#fff',
   },
   profileImagePlaceholder: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
+    width: 98,
+    height: 98,
+    borderRadius: 49,
     backgroundColor: '#fff',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 4,
+    borderWidth: 3,
     borderColor: '#fff',
   },
   profileImageOverlay: {
     position: 'absolute',
-    bottom: 0,
-    right: 0,
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    bottom: 2,
+    right: 2,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     backgroundColor: '#000',
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 3,
+    borderWidth: 2,
     borderColor: '#fff',
   },
   profileLabel: {
-    fontSize: 16,
+    fontSize: 13,
     fontWeight: '600',
-    color: '#fff',
+    color: '#4b5563',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
   },
   formCard: {
     backgroundColor: '#fff',
-    borderRadius: 24,
+    borderRadius: 22,
     padding: 24,
     marginBottom: 20,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.3,
-    shadowRadius: 20,
-    elevation: 10,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.22,
+    shadowRadius: 14,
+    elevation: 8,
+  },
+  sectionTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 1,
+    color: '#6b7280',
+    marginBottom: 12,
+    textTransform: 'uppercase',
   },
   inputGroup: {
     marginBottom: 20,
@@ -469,12 +680,21 @@ const styles = StyleSheet.create({
   inputWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#f9fafb',
     borderRadius: 12,
-    borderWidth: 2,
-    borderColor: '#f5f5f5',
+    borderWidth: 1.5,
+    borderColor: '#e5e7eb',
     paddingHorizontal: 16,
     minHeight: 56,
+  },
+  textAreaWrapper: {
+    alignItems: 'flex-start',
+    minHeight: 110,
+    paddingVertical: 8,
+  },
+  textArea: {
+    minHeight: 90,
+    paddingVertical: 8,
   },
   inputIcon: {
     marginRight: 12,
@@ -485,6 +705,14 @@ const styles = StyleSheet.create({
     color: '#000',
     paddingVertical: 16,
   },
+  disabledInputWrapper: {
+    backgroundColor: '#f3f4f6',
+    borderColor: '#e5e7eb',
+    opacity: 0.8,
+  },
+  disabledInput: {
+    color: '#888',
+  },
   cityText: {
     flex: 1,
     fontSize: 16,
@@ -493,6 +721,16 @@ const styles = StyleSheet.create({
   },
   cityPlaceholder: {
     color: '#999',
+  },
+  bioLabelRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  bioCount: {
+    fontSize: 12,
+    color: '#6b7280',
+    fontWeight: '600',
   },
   modalOverlay: {
     flex: 1,
@@ -552,6 +790,7 @@ const styles = StyleSheet.create({
     height: 56,
     justifyContent: 'center',
     alignItems: 'center',
+    flexDirection: 'row',
     marginTop: 8,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
@@ -561,6 +800,25 @@ const styles = StyleSheet.create({
   },
   saveBtnDisabled: {
     opacity: 0.6,
+  },
+  unsavedBanner: {
+    marginTop: 8,
+    marginBottom: 12,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#ffedd5',
+    borderWidth: 1,
+    borderColor: '#fdba74',
+  },
+  unsavedBannerText: {
+    flex: 1,
+    color: '#7c2d12',
+    fontSize: 12,
+    fontWeight: '700',
   },
   saveBtnText: {
     color: '#fff',

@@ -1,45 +1,87 @@
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import { collection, onSnapshot, getFirestore, orderBy, query, where, getDocs } from 'firebase/firestore';
-import React, { useRef, useState } from 'react';
-import { ActivityIndicator, Animated, Easing, FlatList, Image, KeyboardAvoidingView, Modal, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { Video, ResizeMode } from 'expo-av';
+import { collection, getFirestore, onSnapshot, orderBy, query, where } from 'firebase/firestore';
+import React, { useRef } from 'react';
+import { Animated, Easing, FlatList, Image, Platform, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import PostActionsMenu from '../components/PostActionsMenu';
-import i18n from '../locales/i18n';
+import ZoomableFeedMedia from '../components/feed/ZoomableFeedMedia';
 import { auth } from '../lib/firebase';
+import i18n from '../locales/i18n';
+
+const formatPostTime = (timestamp: Date | null) => {
+  if (!timestamp) return '';
+
+  const diffSeconds = Math.max(0, Math.floor((Date.now() - timestamp.getTime()) / 1000));
+
+  if (diffSeconds < 60) return i18n.t('justNow') || 'Just now';
+  if (diffSeconds < 3600) return `${Math.floor(diffSeconds / 60)}m`;
+  if (diffSeconds < 86400) return `${Math.floor(diffSeconds / 3600)}h`;
+  if (diffSeconds < 604800) return `${Math.floor(diffSeconds / 86400)}d`;
+
+  return timestamp.toLocaleDateString([], { month: 'short', day: 'numeric' });
+};
+
+const getAuthorInitials = (name?: string) => {
+  const safeName = String(name || 'User').trim();
+  if (!safeName) return 'U';
+
+  return safeName
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part.charAt(0).toUpperCase())
+    .join('');
+};
+
+const getAuthorAvatarUri = (item: any) => {
+  const candidate = item?.authorPhoto || item?.ownerPhoto || item?.profilePhoto || item?.profilePic || item?.photo || item?.avatarUrl;
+  return typeof candidate === 'string' && candidate.length > 0 ? candidate : null;
+};
+
+const getRoleBadgeMeta = (role?: string) => {
+  switch (role) {
+    case 'academy':
+      return {
+        icon: 'school-outline' as const,
+        label: i18n.t('academyRoleLabel') || 'Academy',
+        backgroundColor: '#eff6ff',
+        color: '#1d4ed8',
+      };
+    case 'clinic':
+      return {
+        icon: 'medkit-outline' as const,
+        label: i18n.t('clinicRoleLabel') || 'Clinic',
+        backgroundColor: '#ecfeff',
+        color: '#0e7490',
+      };
+    case 'admin':
+      return {
+        icon: 'shield-checkmark-outline' as const,
+        label: i18n.t('adminRoleLabel') || 'Admin',
+        backgroundColor: '#fef3c7',
+        color: '#b45309',
+      };
+    default:
+      return {
+        icon: 'people-outline' as const,
+        label: i18n.t('parentRoleLabel') || 'Parent',
+        backgroundColor: '#ecfdf5',
+        color: '#047857',
+      };
+  }
+};
 
 export default function ParentFeedScreen() {
+  const router = useRouter();
   const { openMenu } = useHamburgerMenu();
-  const [feed, setFeed] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [fullScreenMedia, setFullScreenMedia] = useState<{ uri: string; type: 'image' | 'video' } | null>(null);
+  const [feed, setFeed] = React.useState<any[]>([]);
+  const [loading, setLoading] = React.useState(true);
+  const [refreshing, setRefreshing] = React.useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  const [parentPosts, setParentPosts] = useState<any[]>([]);
-  const [adminPosts, setAdminPosts] = useState<any[]>([]);
-
-  // Merge parent posts and admin posts (deduplicate by post ID)
-  React.useEffect(() => {
-    const active = (p: any) => !p.status || p.status === 'active';
-    const getTs = (p: any) => p.timestamp?.seconds ?? p.createdAt?.seconds ?? 0;
-    
-    // Combine both arrays and deduplicate by post ID
-    const allPosts = [...parentPosts.filter(active), ...adminPosts.filter(active)];
-    const uniquePostsMap = new Map<string, any>();
-    
-    // Use Map to ensure unique posts by ID (later posts override earlier ones)
-    allPosts.forEach(post => {
-      if (post.id) {
-        uniquePostsMap.set(post.id, post);
-      }
-    });
-    
-    // Convert back to array and sort by timestamp
-    const merged = Array.from(uniquePostsMap.values())
-      .sort((a, b) => getTs(b) - getTs(a));
-    setFeed(merged);
-  }, [parentPosts, adminPosts]);
+  const [parentPosts, setParentPosts] = React.useState<any[]>([]);
+  const [adminPosts, setAdminPosts] = React.useState<any[]>([]);
 
   React.useEffect(() => {
     Animated.timing(fadeAnim, {
@@ -50,124 +92,114 @@ export default function ParentFeedScreen() {
     }).start();
   }, []);
 
+  const handleRefresh = React.useCallback(() => {
+    setRefreshing(true);
+    setTimeout(() => setRefreshing(false), 700);
+  }, []);
+
+  React.useEffect(() => {
+    const active = (p: any) => !p.status || p.status === 'active';
+    const getTs = (p: any) => p.timestamp?.seconds ?? p.createdAt?.seconds ?? 0;
+
+    const allPosts = [...parentPosts.filter(active), ...adminPosts.filter(active)];
+    const uniquePostsMap = new Map<string, any>();
+
+    allPosts.forEach((post) => {
+      if (post.id) uniquePostsMap.set(post.id, post);
+    });
+
+    const merged = Array.from(uniquePostsMap.values()).sort((a, b) => getTs(b) - getTs(a));
+    setFeed(merged);
+  }, [parentPosts, adminPosts]);
+
   React.useEffect(() => {
     setLoading(true);
-    
-    // Check if user is authenticated before setting up listener
     const user = auth.currentUser;
     if (!user) {
-      setFeed([]);
+      setParentPosts([]);
+      setAdminPosts([]);
       setLoading(false);
       return;
     }
-    
+
     const db = getFirestore();
     const postsRef = collection(db, 'posts');
-    
-    // Parent feed: Show posts where visibleToRoles array-contains "parent" AND status == "active"
-    const q = query(
+    const qParent = query(
       postsRef,
       where('visibleToRoles', 'array-contains', 'parent'),
       where('status', '==', 'active'),
       orderBy('timestamp', 'desc')
     );
+    const qAdmin = query(postsRef, where('ownerRole', '==', 'admin'));
+    let unsubParentFallback: (() => void) | null = null;
 
-    // Admin posts query (visible to all users)
-    // Query only by ownerRole to avoid composite index requirement
-    // Filter by status and sort client-side
-    const qAdmin = query(
-      postsRef,
-      where('ownerRole', '==', 'admin')
-    );
-
-    // Set up real-time listener for parent posts
-    const unsubscribe = onSnapshot(
-      q,
-      (querySnapshot) => {
-        // Check authentication before processing
+    const unsubParent = onSnapshot(
+      qParent,
+      (snap) => {
         if (!auth.currentUser) {
           setParentPosts([]);
-          setLoading(false);
           return;
         }
-        
-        const posts = querySnapshot.docs.map(doc => ({ 
-          id: doc.id, 
-          ...doc.data() 
-        }));
+
+        const posts = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() }))
+          .filter((post: any) => !post.status || post.status === 'active');
         setParentPosts(posts);
       },
-      (error) => {
-        // Check if user is still authenticated before attempting fallback
-        if (!auth.currentUser) {
-          setFeed([]);
-          setLoading(false);
+      (err: any) => {
+        if (err?.code === 'permission-denied' || err?.message?.includes('permission')) {
+          setParentPosts([]);
           return;
         }
-        
-        // Check if error is due to permissions (user logged out)
-        if (error.code === 'permission-denied' || error.message?.includes('permission')) {
-          // Silently handle permission errors (user likely logged out)
-          setFeed([]);
-          setLoading(false);
+
+        const needsIndex = String(err?.message || '').toLowerCase().includes('requires an index');
+        if (!needsIndex) {
+          console.error('Parent feed (parent posts) error:', err?.message);
+          setParentPosts([]);
           return;
         }
-        
-        console.error('Parent feed listener error:', error);
-        // Fallback: try querying without status filter for backward compatibility
-        const fallbackQ = query(
-          postsRef,
-          where('visibleToRoles', 'array-contains', 'parent'),
-          orderBy('timestamp', 'desc')
-        );
-        
-        let fallbackUnsubscribe: (() => void) | null = null;
-        fallbackUnsubscribe = onSnapshot(
+
+        // Fallback avoids composite index by removing filters/sort from server query.
+        const fallbackQ = query(postsRef, where('visibleToRoles', 'array-contains', 'parent'));
+        unsubParentFallback = onSnapshot(
           fallbackQ,
-          (snapshot) => {
-            // Check authentication again before processing
+          (snap) => {
             if (!auth.currentUser) {
-              if (fallbackUnsubscribe) fallbackUnsubscribe();
-              setFeed([]);
-              setLoading(false);
-              return;
-            }
-            
-            const posts = snapshot.docs
-              .map(doc => ({ id: doc.id, ...doc.data() }))
-              .filter((post: any) => !post.status || post.status === 'active');
-            setParentPosts(posts);
-          },
-          (fallbackError) => {
-            // Check if error is due to permissions
-            if (fallbackError.code === 'permission-denied' || fallbackError.message?.includes('permission')) {
-              // Silently handle permission errors
-              if (fallbackUnsubscribe) fallbackUnsubscribe();
               setParentPosts([]);
               return;
             }
-            console.error('Parent feed fallback error:', fallbackError);
+
+            const posts = snap.docs
+              .map((d) => ({ id: d.id, ...d.data() }))
+              .filter((post: any) => !post.status || post.status === 'active')
+              .sort((a: any, b: any) => {
+                const getTs = (p: any) => p.timestamp?.seconds ?? p.createdAt?.seconds ?? 0;
+                return getTs(b) - getTs(a);
+              });
+            setParentPosts(posts);
+          },
+          (fallbackErr: any) => {
+            if (fallbackErr?.code === 'permission-denied' || fallbackErr?.message?.includes('permission')) {
+              setParentPosts([]);
+              return;
+            }
+            console.error('Parent feed (parent fallback) error:', fallbackErr?.message);
             setParentPosts([]);
           }
         );
       }
     );
 
-    // Set up listener for admin posts
-    const unsubscribeAdmin = onSnapshot(
+    const unsubAdmin = onSnapshot(
       qAdmin,
-      (querySnapshot) => {
+      (snap) => {
         if (!auth.currentUser) {
           setAdminPosts([]);
           return;
         }
-        
-        // Filter by status and sort client-side to avoid composite index
-        const posts = querySnapshot.docs
-          .map(doc => ({ 
-            id: doc.id, 
-            ...doc.data() 
-          }))
+
+        const posts = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() }))
           .filter((post: any) => !post.status || post.status === 'active')
           .sort((a: any, b: any) => {
             const getTs = (p: any) => p.timestamp?.seconds ?? p.createdAt?.seconds ?? 0;
@@ -175,188 +207,193 @@ export default function ParentFeedScreen() {
           });
         setAdminPosts(posts);
       },
-      async (error) => {
-        if (!auth.currentUser) {
+      (err: any) => {
+        if (err?.code === 'permission-denied' || err?.message?.includes('permission')) {
           setAdminPosts([]);
           return;
         }
-        
-        if (error.code === 'permission-denied' || error.message?.includes('permission')) {
-          setAdminPosts([]);
-          return;
-        }
-        
-        console.error('Parent feed (admin) error:', error?.message);
+        console.error('Parent feed (admin posts) error:', err?.message);
         setAdminPosts([]);
       }
     );
 
-    // Stop loading after both queries have run
     const t = setTimeout(() => setLoading(false), 800);
 
-    // Cleanup listeners on unmount
     return () => {
-      unsubscribe();
-      unsubscribeAdmin();
+      unsubParent();
+      if (unsubParentFallback) unsubParentFallback();
+      unsubAdmin();
       clearTimeout(t);
-    };
-
-    // Cleanup listener on unmount
-    return () => {
-      unsubscribe();
     };
   }, []);
 
+  const renderFeedItem = (item: any) => {
+    const timestamp = item.timestamp?.seconds
+      ? new Date(item.timestamp.seconds * 1000)
+      : item.createdAt?.seconds
+        ? new Date(item.createdAt.seconds * 1000)
+        : null;
+    const roleMeta = getRoleBadgeMeta(item.ownerRole);
+    const avatarUri = getAuthorAvatarUri(item);
+    const taggedNames = Array.isArray(item.taggedUserNames)
+      ? item.taggedUserNames.filter(Boolean)
+      : Array.isArray(item.taggedUsers)
+        ? item.taggedUsers.map((entry: any) => (typeof entry === 'string' ? entry : entry?.name)).filter(Boolean)
+        : [];
+
+    return (
+      <View key={item.id} style={styles.feedItem}>
+        <View style={styles.feedHeader}>
+          <View style={styles.feedAuthorContainer}>
+            {avatarUri ? (
+              <Image source={{ uri: avatarUri }} style={styles.authorAvatarImage} />
+            ) : (
+              <View style={styles.authorAvatarFallback}>
+                <Text style={styles.authorAvatarFallbackText}>{getAuthorInitials(item.author)}</Text>
+              </View>
+            )}
+            <View style={styles.feedAuthorTextWrap}>
+              <Text
+                style={styles.feedAuthor}
+                numberOfLines={1}
+                ellipsizeMode="tail"
+              >
+                {item.author || 'Anonymous'}
+              </Text>
+              <View style={styles.feedMetaRow}>
+                <View style={[styles.roleBadge, { backgroundColor: roleMeta.backgroundColor }]}>
+                  <Ionicons name={roleMeta.icon} size={12} color={roleMeta.color} />
+                  <Text style={[styles.roleBadgeText, { color: roleMeta.color }]}>{roleMeta.label}</Text>
+                </View>
+                {timestamp && <Text style={styles.feedTime}>{formatPostTime(timestamp)}</Text>}
+              </View>
+            </View>
+          </View>
+          <View style={styles.feedHeaderRight}>
+            <PostActionsMenu
+              postId={item.id}
+              postOwnerId={item.ownerId}
+              postOwnerRole={item.ownerRole}
+              mediaUrl={item.mediaUrl}
+              mediaType={item.mediaType}
+              contentText={item.content}
+              postTimestamp={item.timestamp || item.createdAt}
+            />
+          </View>
+        </View>
+
+        <ZoomableFeedMedia post={item} />
+
+        {item.content && (
+          <Text style={styles.feedContent}>{item.content}</Text>
+        )}
+
+        {taggedNames.length > 0 && (
+          <Text style={styles.taggedUsersText}>
+            {i18n.t('taggedInPost', { names: taggedNames.map((name: string) => `@${name}`).join(', ') }) || `Tagged: ${taggedNames.map((name: string) => `@${name}`).join(', ')}`}
+          </Text>
+        )}
+      </View>
+    );
+  };
+
   return (
-    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <View style={styles.container}>
       <LinearGradient
         colors={['#000000', '#1a1a1a', '#2d2d2d']}
         style={styles.gradient}
       >
+        <HamburgerMenu />
         <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
-          {/* Header */}
-          <View style={styles.header}>
-            <TouchableOpacity style={styles.menuButton} onPress={openMenu}>
-              <Ionicons name="menu" size={24} color="#fff" />
-            </TouchableOpacity>
-            <View style={styles.headerContent}>
-              <Text style={styles.headerTitle}>{i18n.t('parentFeed') || 'Parent Feed'}</Text>
-              <Text style={styles.headerSubtitle}>{i18n.t('latestUpdates') || 'Latest updates from academies'}</Text>
-            </View>
-          </View>
-
-      <HamburgerMenu />
-
-      {loading ? (
-        <View style={styles.loadingState}>
-          <ActivityIndicator size="large" color="#fff" />
-          <Text style={styles.loadingText}>{i18n.t('loading') || 'Loading...'}</Text>
-        </View>
-      ) : feed.length === 0 ? (
-        <View style={styles.emptyState}>
-          <Ionicons name="newspaper-outline" size={64} color="#666" />
-          <Text style={styles.emptyText}>{i18n.t('noPosts') || 'No posts yet'}</Text>
-          <Text style={styles.emptySubtext}>{i18n.t('beFirstToPost') || 'Be the first to share something!'}</Text>
-        </View>
-      ) : (
-        <FlatList
-          data={feed}
-          keyExtractor={item => item.id}
-          contentContainerStyle={styles.feedContent}
-          showsVerticalScrollIndicator={false}
-          renderItem={({ item }: any) => {
-            const timestamp = item.timestamp?.seconds 
-              ? new Date(item.timestamp.seconds * 1000) 
-              : item.createdAt?.seconds 
-                ? new Date(item.createdAt.seconds * 1000)
-                : null;
-
-            return (
-              <View style={styles.postCard}>
-                <View style={styles.postHeader}>
-                  <View style={styles.academyAvatar}>
-                    <Ionicons name="person-circle-outline" size={20} color="#000" />
+          {loading ? (
+            <View style={styles.loadingContainer}>
+              {[1, 2, 3].map((card) => (
+                <View key={`skeleton-${card}`} style={[styles.feedItem, styles.skeletonCard]}>
+                  <View style={styles.skeletonHeader}>
+                    <View style={styles.skeletonAvatar} />
+                    <View style={styles.skeletonTextWrap}>
+                      <View style={[styles.skeletonLine, styles.skeletonLineShort]} />
+                      <View style={[styles.skeletonLine, styles.skeletonLineTiny]} />
+                    </View>
                   </View>
-                  <View style={styles.postHeaderText}>
-                    <Text 
-                      style={styles.academyName}
-                      numberOfLines={1}
-                      ellipsizeMode="tail"
-                    >
-                      {item.author || 'User'}
-                    </Text>
-                    {timestamp && (
-                      <Text style={styles.postTime}>
-                        {timestamp.toLocaleDateString()}
-                      </Text>
-                    )}
-                  </View>
-                  <PostActionsMenu
-                    postId={item.id}
-                    postOwnerId={item.ownerId}
-                    postOwnerRole={item.ownerRole}
-                    mediaUrl={item.mediaUrl}
-                    mediaType={item.mediaType}
-                    contentText={item.content}
-                    postTimestamp={item.timestamp || item.createdAt}
-                  />
+                  <View style={styles.skeletonMedia} />
+                  <View style={[styles.skeletonLine, styles.skeletonLineBody]} />
+                  <View style={[styles.skeletonLine, styles.skeletonLineMedium]} />
                 </View>
-                
-                {/* Media display */}
-                {item.mediaUrl && (
-                  <View style={styles.mediaContainer}>
-                    {item.mediaType === 'video' ? (
-                      <Video
-                        source={{ uri: item.mediaUrl }}
-                        style={styles.mediaVideo}
-                        useNativeControls
-                        resizeMode={ResizeMode.CONTAIN}
-                        isLooping={false}
-                      />
-                    ) : (
-                      <Image 
-                        source={{ uri: item.mediaUrl }} 
-                        style={styles.postImage}
-                        resizeMode="cover"
-                      />
-                    )}
-                    <TouchableOpacity
-                      style={styles.fullScreenButton}
-                      onPress={() => setFullScreenMedia({ uri: item.mediaUrl, type: item.mediaType === 'video' ? 'video' : 'image' })}
-                      activeOpacity={0.7}
-                    >
-                      <Ionicons name="expand" size={24} color="#fff" />
+              ))}
+            </View>
+          ) : (
+            <FlatList
+              data={feed}
+              renderItem={({ item }) => renderFeedItem(item)}
+              keyExtractor={(item) => item.id}
+              contentContainerStyle={styles.scrollContent}
+              showsVerticalScrollIndicator={false}
+              refreshControl={
+                <RefreshControl
+                  refreshing={refreshing}
+                  onRefresh={handleRefresh}
+                  tintColor="#fff"
+                  colors={["#fff"]}
+                  progressBackgroundColor="#111827"
+                />
+              }
+              initialNumToRender={5}
+              maxToRenderPerBatch={6}
+              windowSize={7}
+              removeClippedSubviews={Platform.OS === 'android'}
+              ListHeaderComponent={
+                <View style={styles.listIntroWrap}>
+                  <View style={styles.header}>
+                    <TouchableOpacity style={styles.menuButton} onPress={openMenu}>
+                      <Ionicons name="menu" size={24} color="#fff" />
                     </TouchableOpacity>
+                    <View style={styles.headerContent}>
+                      <Text style={styles.headerTitle}>{i18n.t('feed') || 'Feed'}</Text>
+                      <Text style={styles.headerSubtitle}>{i18n.t('latestUpdates') || 'Latest updates from the community'}</Text>
+                    </View>
                   </View>
-                )}
-                
-                <Text style={styles.postContent}>{item.content || ''}</Text>
-              </View>
-            );
-          }}
-        />
-      )}
+
+                  <View style={styles.composerCard}>
+                    <View style={styles.composerTopRow}>
+                      <View style={styles.composerAvatar}>
+                        <Ionicons name="people" size={18} color="#111827" />
+                      </View>
+                      <View style={styles.composerTextWrap}>
+                        <Text style={styles.composerTitle}>{i18n.t('exploreForYourChild') || 'Explore options for your child'}</Text>
+                        <Text style={styles.composerSubtitle}>{i18n.t('findAcademiesClinicsFast') || 'Quickly jump to academies, clinics, and active bookings.'}</Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.quickActionRow}>
+                      <TouchableOpacity style={styles.primaryActionButton} onPress={() => router.push('/parent-search-academies' as any)}>
+                        <Ionicons name="school-outline" size={16} color="#fff" />
+                        <Text style={styles.primaryActionText}>{i18n.t('searchAcademies') || 'Search Academies'}</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity style={styles.secondaryActionButton} onPress={() => router.push('/parent-search-clinics' as any)}>
+                        <Ionicons name="medkit-outline" size={16} color="#111827" />
+                        <Text style={styles.secondaryActionText}>{i18n.t('searchClinics') || 'Search Clinics'}</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </View>
+              }
+              ListEmptyComponent={
+                <View style={styles.emptyContainer}>
+                  <Ionicons name="document-text-outline" size={64} color="rgba(255, 255, 255, 0.3)" />
+                  <Text style={styles.emptyText}>{i18n.t('noPosts') || 'No posts yet.'}</Text>
+                  <Text style={styles.emptySubtext}>{i18n.t('checkBackSoon') || 'Check back soon for updates from academies and clinics.'}</Text>
+                  <TouchableOpacity style={styles.emptyActionButton} onPress={() => router.push('/parent-bookings' as any)}>
+                    <Text style={styles.emptyActionText}>{i18n.t('viewMyBookings') || 'View My Bookings'}</Text>
+                  </TouchableOpacity>
+                </View>
+              }
+            />
+          )}
         </Animated.View>
       </LinearGradient>
-
-      {/* Full Screen Media Viewer */}
-      <Modal
-        visible={!!fullScreenMedia}
-        transparent={false}
-        animationType="fade"
-        onRequestClose={() => setFullScreenMedia(null)}
-        statusBarTranslucent={true}
-      >
-        <View style={styles.fullScreenContainer}>
-          <TouchableOpacity
-            style={styles.fullScreenCloseButton}
-            onPress={() => setFullScreenMedia(null)}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="close" size={32} color="#fff" />
-          </TouchableOpacity>
-          {fullScreenMedia && (
-            <View style={styles.fullScreenContent}>
-              {fullScreenMedia.type === 'video' ? (
-                <Video
-                  source={{ uri: fullScreenMedia.uri }}
-                  style={styles.fullScreenVideo}
-                  useNativeControls
-                  resizeMode={ResizeMode.CONTAIN}
-                  isLooping={false}
-                />
-              ) : (
-                <Image
-                  source={{ uri: fullScreenMedia.uri }}
-                  style={styles.fullScreenImage}
-                  resizeMode="contain"
-                />
-              )}
-            </View>
-          )}
-        </View>
-      </Modal>
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 
@@ -368,11 +405,9 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   header: {
-    paddingTop: Platform.OS === 'ios' ? 60 : 40,
-    paddingHorizontal: 24,
-    paddingBottom: 20,
-    flexDirection: 'row',
-    alignItems: 'center',
+    paddingTop: Platform.OS === 'ios' ? 60 : 32,
+    paddingHorizontal: 6,
+    paddingBottom: 16,
   },
   menuButton: {
     width: 44,
@@ -381,77 +416,279 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.1)',
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 16,
+    marginBottom: 20,
   },
   headerContent: {
-    flex: 1,
     alignItems: 'center',
   },
   headerTitle: {
-    fontSize: 28,
+    fontSize: 32,
     fontWeight: 'bold',
     color: '#fff',
-    marginBottom: 4,
+    marginBottom: 8,
     textAlign: 'center',
   },
   headerSubtitle: {
-    fontSize: 14,
+    fontSize: 16,
     color: 'rgba(255, 255, 255, 0.7)',
     textAlign: 'center',
   },
-  feedContent: {
-    paddingHorizontal: 20,
+  scrollContent: {
+    paddingHorizontal: 14,
     paddingBottom: 40,
   },
-  postCard: {
-    backgroundColor: '#fff',
-    borderRadius: 20,
-    padding: 20,
-    marginBottom: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 12,
-    elevation: 5,
+  listIntroWrap: {
+    marginBottom: 12,
   },
-  postHeader: {
+  composerCard: {
+    backgroundColor: 'rgba(255,255,255,0.98)',
+    borderRadius: 18,
+    padding: 14,
+    marginBottom: 12,
+    marginHorizontal: 2,
+    borderWidth: 1,
+    borderColor: '#f1f5f9',
+  },
+  composerTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 12,
   },
-  academyAvatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#f0f0f0',
-    justifyContent: 'center',
+  composerAvatar: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#f3f4f6',
     alignItems: 'center',
-    marginRight: 12,
+    justifyContent: 'center',
+    marginRight: 10,
   },
-  postHeaderText: {
+  composerTextWrap: {
     flex: 1,
   },
-  academyName: {
+  composerTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 3,
+  },
+  composerSubtitle: {
+    fontSize: 12,
+    color: '#6b7280',
+    lineHeight: 17,
+  },
+  quickActionRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  primaryActionButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#111827',
+    borderRadius: 14,
+    paddingVertical: 12,
+  },
+  primaryActionText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  secondaryActionButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#f9fafb',
+    borderRadius: 14,
+    paddingVertical: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  secondaryActionText: {
+    color: '#111827',
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  loadingContainer: {
+    paddingVertical: 12,
+  },
+  skeletonCard: {
+    overflow: 'hidden',
+  },
+  skeletonHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  skeletonAvatar: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#e5e7eb',
+    marginRight: 10,
+  },
+  skeletonTextWrap: {
+    flex: 1,
+  },
+  skeletonLine: {
+    height: 10,
+    borderRadius: 999,
+    backgroundColor: '#e5e7eb',
+  },
+  skeletonLineShort: {
+    width: '42%',
+    marginBottom: 8,
+  },
+  skeletonLineTiny: {
+    width: '28%',
+  },
+  skeletonMedia: {
+    height: 240,
+    borderRadius: 16,
+    backgroundColor: '#e5e7eb',
+    marginBottom: 12,
+  },
+  skeletonLineBody: {
+    width: '88%',
+    marginBottom: 8,
+  },
+  skeletonLineMedium: {
+    width: '62%',
+  },
+  emptyContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 80,
+  },
+  emptyText: {
+    color: '#fff',
+    fontSize: 20,
+    fontWeight: '600',
+    marginTop: 24,
+    textAlign: 'center',
+  },
+  emptySubtext: {
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontSize: 14,
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  emptyActionButton: {
+    marginTop: 16,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+  },
+  emptyActionText: {
+    color: '#111827',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  feedItem: {
+    backgroundColor: '#fff',
+    borderRadius: 18,
+    padding: 14,
+    marginBottom: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  feedHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  feedHeaderRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexShrink: 0,
+  },
+  authorAvatarImage: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#e5e7eb',
+  },
+  authorAvatarFallback: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#111827',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  authorAvatarFallbackText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  feedAuthorContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flex: 1,
+    flexShrink: 1,
+    minWidth: 0,
+    marginRight: 8,
+  },
+  feedAuthorTextWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  feedAuthor: {
     fontSize: 16,
     fontWeight: 'bold',
     color: '#000',
-    marginBottom: 2,
+    flexShrink: 1,
+    marginBottom: 4,
   },
-  postTime: {
+  roleBadge: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  roleBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  feedMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  feedTime: {
+    color: '#6b7280',
     fontSize: 12,
-    color: '#999',
+    fontWeight: '600',
   },
-  postContent: {
+  feedContent: {
     fontSize: 15,
-    color: '#333',
+    color: '#222',
     lineHeight: 22,
-    marginBottom: 12,
+    marginTop: 12,
   },
-  postImage: {
-    width: '100%',
-    height: 200,
-    borderRadius: 12,
+  taggedUsersText: {
+    fontSize: 13,
+    color: '#1d4ed8',
     marginTop: 8,
+    fontWeight: '600',
   },
   mediaContainer: {
     width: '100%',
@@ -464,34 +701,6 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 300,
     backgroundColor: '#000',
-  },
-  loadingState: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 60,
-  },
-  loadingText: {
-    color: '#fff',
-    marginTop: 12,
-    fontSize: 16,
-  },
-  emptyState: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 60,
-  },
-  emptyText: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#fff',
-    marginTop: 16,
-    marginBottom: 8,
-  },
-  emptySubtext: {
-    fontSize: 14,
-    color: 'rgba(255, 255, 255, 0.6)',
-    textAlign: 'center',
   },
   fullScreenButton: {
     position: 'absolute',

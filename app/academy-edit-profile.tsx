@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { doc, getDoc, updateDoc, collection, query, where, getDocs, deleteDoc, addDoc } from 'firebase/firestore';
 import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Animated, Easing, Image, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, useWindowDimensions } from 'react-native';
@@ -10,6 +11,7 @@ import i18n from '../locales/i18n';
 import { auth, db } from '../lib/firebase';
 import { uploadMedia } from '../services/MediaService';
 import * as ImagePicker from 'expo-image-picker';
+import * as Location from 'expo-location';
 
 const AGE_GROUPS = Array.from({ length: 11 }, (_, i) => (7 + i).toString());
 
@@ -34,12 +36,18 @@ function formatTime12Hour(time24: string): string {
   return `${hours12}:${minutes.toString().padStart(2, '0')} ${period}`;
 }
 
+const LOCATION_PICKER_RESULT_KEY = 'academyEditLocationPickerResult';
+
 export default function AcademyEditProfileScreen({ academyName: academyNameProp }: { academyName?: string }) {
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [academyName, setAcademyName] = useState(academyNameProp || '');
   const [city, setCity] = useState('');
   const [description, setDescription] = useState('');
+  const [mapUrl, setMapUrl] = useState('');
+  const [latitudeInput, setLatitudeInput] = useState('');
+  const [longitudeInput, setLongitudeInput] = useState('');
+  const [locationAutofillLoading, setLocationAutofillLoading] = useState(false);
   const [prices, setPrices] = useState<{ [key: string]: string }>({});
   const [selected, setSelected] = useState<string[]>([]);
   const [newPrice, setNewPrice] = useState('');
@@ -60,9 +68,92 @@ export default function AcademyEditProfileScreen({ academyName: academyNameProp 
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const [showCityModal, setShowCityModal] = useState(false);
   const cityOptions = Object.entries(i18n.t('cities', { returnObjects: true }) as Record<string, string>).map(([key, label]) => ({ key, label }));
+  const [initialProfileState, setInitialProfileState] = useState('');
+
+  const parseCoordinateValue = (value: string): number | null => {
+    const normalized = value.trim().replace(/,/g, '.');
+    if (!normalized) return null;
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : Number.NaN;
+  };
+
+  const extractCoordinatesFromMapUrl = (url: string): { latitude: number; longitude: number } | null => {
+    if (!url?.trim()) return null;
+
+    const decodedUrl = decodeURIComponent(url.trim());
+    const patterns = [
+      /@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
+      /[?&](?:q|query|destination)=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
+      /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/,
+    ];
+
+    for (const pattern of patterns) {
+      const match = decodedUrl.match(pattern);
+      if (match) {
+        const latitude = Number(match[1]);
+        const longitude = Number(match[2]);
+        if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+          return { latitude, longitude };
+        }
+      }
+    }
+
+    return null;
+  };
 
   const [privateTrainings, setPrivateTrainings] = useState<any[]>([]);
   const [deletedTrainings, setDeletedTrainings] = useState<string[]>([]);
+
+  const serializeAcademyState = (state: {
+    academyName: string;
+    city: string;
+    description: string;
+    mapUrl: string;
+    latitudeInput: string;
+    longitudeInput: string;
+    address: string;
+    contactPerson: string;
+    prices: { [key: string]: string };
+    selected: string[];
+    schedule: { [age: string]: { day: string; time: string } };
+    profilePic: string;
+    profilePicUrl: string;
+    privateTrainings: any[];
+  }) => {
+    const sortedPrices = Object.keys(state.prices)
+      .sort()
+      .reduce((acc: Record<string, string>, key) => {
+        acc[key] = state.prices[key];
+        return acc;
+      }, {});
+
+    const normalizedTrainings = state.privateTrainings.map((training) => ({
+      id: training?.id || '',
+      coachName: (training?.coachName || '').trim(),
+      privateTrainingPrice: String(training?.privateTrainingPrice || '').trim(),
+      coachBio: (training?.coachBio || '').trim(),
+      specializations: (training?.specializations || '').trim(),
+      sessionDuration: String(training?.sessionDuration || '').trim(),
+      availability: (training?.availability || '').trim(),
+    }));
+
+    return JSON.stringify({
+      academyName: state.academyName.trim(),
+      city: state.city.trim(),
+      description: state.description.trim(),
+      mapUrl: state.mapUrl.trim(),
+      latitudeInput: state.latitudeInput.trim(),
+      longitudeInput: state.longitudeInput.trim(),
+      address: state.address.trim(),
+      contactPerson: state.contactPerson.trim(),
+      prices: sortedPrices,
+      selected: [...state.selected].sort(),
+      schedule: state.schedule,
+      profilePic: state.profilePic.trim(),
+      profilePicUrl: state.profilePicUrl.trim(),
+      privateTrainings: normalizedTrainings,
+    });
+  };
 
   const updateTraining = (index: number, field: string, value: string) => {
     setPrivateTrainings(prev => prev.map((t, i) => i === index ? { ...t, [field]: value } : t));
@@ -87,6 +178,38 @@ export default function AcademyEditProfileScreen({ academyName: academyNameProp 
     }).start();
   }, []);
 
+  useFocusEffect(
+    React.useCallback(() => {
+      let active = true;
+
+      const consumePickedLocation = async () => {
+        try {
+          const stored = await AsyncStorage.getItem(LOCATION_PICKER_RESULT_KEY);
+          if (!stored || !active) return;
+
+          const picked = JSON.parse(stored);
+          if (picked?.latitude !== undefined && picked?.longitude !== undefined) {
+            setLatitudeInput(String(picked.latitude));
+            setLongitudeInput(String(picked.longitude));
+            if (picked.mapUrl) {
+              setMapUrl(picked.mapUrl);
+            }
+          }
+
+          await AsyncStorage.removeItem(LOCATION_PICKER_RESULT_KEY);
+        } catch (error) {
+          console.warn('Failed to restore picked academy location on edit profile', error);
+        }
+      };
+
+      consumePickedLocation();
+
+      return () => {
+        active = false;
+      };
+    }, [])
+  );
+
   useEffect(() => {
     async function fetchProfile() {
       setLoading(true);
@@ -95,6 +218,22 @@ export default function AcademyEditProfileScreen({ academyName: academyNameProp 
         const uid = auth.currentUser?.uid;
         if (!uid) {
           setFetchError(i18n.t('couldNotLoadData') || 'Not signed in.');
+          setInitialProfileState(serializeAcademyState({
+            academyName: '',
+            city: '',
+            description: '',
+            mapUrl: '',
+            latitudeInput: '',
+            longitudeInput: '',
+            address: '',
+            contactPerson: '',
+            prices: {},
+            selected: [],
+            schedule: {},
+            profilePic: '',
+            profilePicUrl: '',
+            privateTrainings: [],
+          }));
           return;
         }
         const docRef = doc(db, 'academies', uid);
@@ -105,9 +244,11 @@ export default function AcademyEditProfileScreen({ academyName: academyNameProp 
         }
         const data = docSnap.data();
         const feesOrPrices = data.fees || data.prices || {};
+        const nextSelected = Object.keys(feesOrPrices).length ? Object.keys(feesOrPrices) : [];
+        const nextSchedule = data.schedule || {};
         setPrices(feesOrPrices);
-        setSelected(Object.keys(feesOrPrices).length ? Object.keys(feesOrPrices) : []);
-        if (data.schedule) setSchedule(data.schedule);
+        setSelected(nextSelected);
+        setSchedule(nextSchedule);
         const photoUrl = data.profilePhoto || data.profilePic;
         if (photoUrl) {
           setProfilePic(photoUrl);
@@ -118,6 +259,12 @@ export default function AcademyEditProfileScreen({ academyName: academyNameProp 
         if (data.city) setCity(data.city);
         if (data.description) setDescription(data.description);
         if (data.contactPerson) setContactPerson(data.contactPerson);
+        if (data.mapUrl) setMapUrl(data.mapUrl);
+
+        const savedLatitude = data.latitude ?? data.coordinates?.latitude;
+        const savedLongitude = data.longitude ?? data.coordinates?.longitude;
+        if (savedLatitude !== undefined && savedLatitude !== null) setLatitudeInput(String(savedLatitude));
+        if (savedLongitude !== undefined && savedLongitude !== null) setLongitudeInput(String(savedLongitude));
 
         // Fetch private trainings
         const programsQuery = query(collection(db, 'academy_programs'), where('academyId', '==', uid), where('type', '==', 'private_training'), where('isActive', '==', true));
@@ -134,11 +281,28 @@ export default function AcademyEditProfileScreen({ academyName: academyNameProp 
             availability: pd.availability && pd.availability.general ? pd.availability.general : ''
           };
         });
-        if (pData.length > 0) {
-          setPrivateTrainings(pData);
-        } else {
-          setPrivateTrainings([{ coachName: '', privateTrainingPrice: '', coachBio: '', specializations: '', sessionDuration: '60', availability: '' }]);
-        }
+        const nextTrainings = pData.length > 0
+          ? pData
+          : [{ coachName: '', privateTrainingPrice: '', coachBio: '', specializations: '', sessionDuration: '60', availability: '' }];
+
+        setPrivateTrainings(nextTrainings);
+
+        setInitialProfileState(serializeAcademyState({
+          academyName: data.academyName || '',
+          city: data.city || '',
+          description: data.description || '',
+          mapUrl: data.mapUrl || '',
+          latitudeInput: savedLatitude !== undefined && savedLatitude !== null ? String(savedLatitude) : '',
+          longitudeInput: savedLongitude !== undefined && savedLongitude !== null ? String(savedLongitude) : '',
+          address: data.address || '',
+          contactPerson: data.contactPerson || '',
+          prices: feesOrPrices,
+          selected: nextSelected,
+          schedule: nextSchedule,
+          profilePic: photoUrl || '',
+          profilePicUrl: photoUrl || '',
+          privateTrainings: nextTrainings,
+        }));
       } catch (e: any) {
         setFetchError(e?.message || i18n.t('couldNotLoadData') || 'Could not load academy data.');
       } finally {
@@ -187,6 +351,58 @@ export default function AcademyEditProfileScreen({ academyName: academyNameProp 
     }
   };
 
+  const openMapPicker = () => {
+    const cityLabel = cityOptions.find((option) => option.key === city)?.label || city;
+    router.push({
+      pathname: '/academy-location-picker',
+      params: {
+        storageKey: LOCATION_PICKER_RESULT_KEY,
+        title: academyName || (i18n.t('academy_name') || 'Academy'),
+        latitude: latitudeInput,
+        longitude: longitudeInput,
+        city: cityLabel,
+        address,
+      },
+    });
+  };
+
+  const handleUseCurrentLocation = async () => {
+    try {
+      setLocationAutofillLoading(true);
+      const { status } = await Location.requestForegroundPermissionsAsync();
+
+      if (status !== 'granted') {
+        Alert.alert(
+          i18n.t('locationPermissionNeeded') || 'Location permission needed',
+          i18n.t('locationPermissionMessage') || 'Allow location access to continue.'
+        );
+        return;
+      }
+
+      const currentLocation = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+
+      const lat = currentLocation.coords.latitude.toFixed(6);
+      const lng = currentLocation.coords.longitude.toFixed(6);
+
+      setLatitudeInput(lat);
+      setLongitudeInput(lng);
+
+      if (!mapUrl.trim()) {
+        setMapUrl(`https://www.google.com/maps/search/?api=1&query=${lat},${lng}`);
+      }
+    } catch (locationError) {
+      console.warn('Could not fetch current location for academy profile', locationError);
+      Alert.alert(
+        i18n.t('error') || 'Error',
+        i18n.t('locationUnavailable') || 'Could not get your location right now.'
+      );
+    } finally {
+      setLocationAutofillLoading(false);
+    }
+  };
+
   const handleSave = async () => {
     const uid = auth.currentUser?.uid;
     if (!uid) {
@@ -226,6 +442,61 @@ export default function AcademyEditProfileScreen({ academyName: academyNameProp 
         }
       });
 
+      const manualLatitude = parseCoordinateValue(latitudeInput);
+      const manualLongitude = parseCoordinateValue(longitudeInput);
+      const hasAnyCoordinate = latitudeInput.trim().length > 0 || longitudeInput.trim().length > 0;
+
+      if (hasAnyCoordinate) {
+        const coordinatesIncomplete = manualLatitude === null || manualLongitude === null;
+        const coordinatesInvalid = Number.isNaN(manualLatitude) || Number.isNaN(manualLongitude);
+        const coordinatesOutOfRange =
+          (!coordinatesIncomplete && !coordinatesInvalid) && (
+            manualLatitude! < -90 || manualLatitude! > 90 || manualLongitude! < -180 || manualLongitude! > 180
+          );
+
+        if (coordinatesIncomplete) {
+          Alert.alert(i18n.t('error') || 'Error', i18n.t('enterBothCoordinates') || 'Enter both latitude and longitude, or leave both blank.');
+          setSaving(false);
+          return;
+        }
+
+        if (coordinatesInvalid || coordinatesOutOfRange) {
+          Alert.alert(i18n.t('error') || 'Error', i18n.t('invalidCoordinates') || 'Enter valid map coordinates.');
+          setSaving(false);
+          return;
+        }
+      }
+
+      let geoFields: any = {};
+      const hasManualCoordinates =
+        manualLatitude !== null &&
+        manualLongitude !== null &&
+        !Number.isNaN(manualLatitude) &&
+        !Number.isNaN(manualLongitude);
+
+      if (hasManualCoordinates) {
+        geoFields = {
+          latitude: manualLatitude,
+          longitude: manualLongitude,
+          coordinates: {
+            latitude: manualLatitude,
+            longitude: manualLongitude,
+          },
+        };
+      } else {
+        const parsedFromMapUrl = extractCoordinatesFromMapUrl(mapUrl);
+        if (parsedFromMapUrl) {
+          geoFields = {
+            latitude: parsedFromMapUrl.latitude,
+            longitude: parsedFromMapUrl.longitude,
+            coordinates: {
+              latitude: parsedFromMapUrl.latitude,
+              longitude: parsedFromMapUrl.longitude,
+            },
+          };
+        }
+      }
+
       const updateData: any = {
         fees: feesObj,
         schedule,
@@ -234,7 +505,9 @@ export default function AcademyEditProfileScreen({ academyName: academyNameProp 
         academyName: academyName || null,
         city: city || null,
         description: description || null,
+        mapUrl: mapUrl.trim() || null,
         updatedAt: new Date().toISOString(),
+        ...geoFields,
       };
       if (finalProfilePicUrl) {
         updateData.profilePhoto = finalProfilePicUrl;
@@ -283,6 +556,27 @@ export default function AcademyEditProfileScreen({ academyName: academyNameProp 
         i18n.t('success') || 'Success',
         i18n.t('profileUpdated') || 'Profile updated successfully'
       );
+
+      if (finalProfilePicUrl) {
+        setProfilePic(finalProfilePicUrl);
+        setProfilePicUrl(finalProfilePicUrl);
+      }
+      setInitialProfileState(serializeAcademyState({
+        academyName,
+        city,
+        description,
+        mapUrl,
+        latitudeInput,
+        longitudeInput,
+        address,
+        contactPerson,
+        prices,
+        selected,
+        schedule,
+        profilePic: finalProfilePicUrl || profilePic || '',
+        profilePicUrl: finalProfilePicUrl || profilePicUrl || '',
+        privateTrainings,
+      }));
   
       if (router.canGoBack()) {
         router.back();
@@ -309,6 +603,25 @@ export default function AcademyEditProfileScreen({ academyName: academyNameProp 
       </View>
     );
   }
+
+  const hasUnsavedChanges =
+    initialProfileState !== '' &&
+    serializeAcademyState({
+      academyName,
+      city,
+      description,
+      mapUrl,
+      latitudeInput,
+      longitudeInput,
+      address,
+      contactPerson,
+      prices,
+      selected,
+      schedule,
+      profilePic: profilePic || '',
+      profilePicUrl: profilePicUrl || '',
+      privateTrainings,
+    }) !== initialProfileState;
 
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -462,6 +775,53 @@ export default function AcademyEditProfileScreen({ academyName: academyNameProp 
         )}
       </View>
 
+              <View style={styles.inputGroup}>
+                <Text style={styles.label}>{i18n.t('mapCoordinatesOptional') || 'Location on map'}</Text>
+                <Text style={styles.helperText}>
+                  {i18n.t('mapCoordinatesHelper') || 'Choose the academy directly on the map for the best nearest-to-me accuracy, or use your current location.'}
+                </Text>
+                <View style={styles.mapActionsRow}>
+                  <TouchableOpacity
+                    style={styles.mapPickerButton}
+                    onPress={openMapPicker}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons name="map-outline" size={18} color="#000" />
+                    <Text style={styles.mapPickerButtonText}>{i18n.t('chooseOnMap') || 'Choose on map'}</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.locationAutofillButton, locationAutofillLoading && styles.locationAutofillButtonDisabled]}
+                    onPress={handleUseCurrentLocation}
+                    disabled={locationAutofillLoading}
+                    activeOpacity={0.85}
+                  >
+                    {locationAutofillLoading ? (
+                      <ActivityIndicator size="small" color="#000" />
+                    ) : (
+                      <Ionicons name="locate-outline" size={18} color="#000" />
+                    )}
+                    <Text style={styles.locationAutofillButtonText}>
+                      {locationAutofillLoading
+                        ? (i18n.t('gettingCurrentLocation') || 'Getting current location...')
+                        : (i18n.t('useCurrentLocation') || 'Use current location')}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.mapStatusPill}>
+                  <Ionicons
+                    name={latitudeInput && longitudeInput ? 'checkmark-circle' : 'pin-outline'}
+                    size={18}
+                    color={latitudeInput && longitudeInput ? '#15803d' : '#6b7280'}
+                  />
+                  <Text style={styles.mapStatusText}>
+                    {latitudeInput && longitudeInput
+                      ? (i18n.t('mapPinSelected') || 'Map pin selected successfully')
+                      : (i18n.t('mapPinNotSelected') || 'No map pin selected yet')}
+                  </Text>
+                </View>
+              </View>
+
               {/* Contact Person */}
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>{i18n.t('contactPerson')}</Text>
@@ -495,53 +855,15 @@ export default function AcademyEditProfileScreen({ academyName: academyNameProp 
         )}
       </View>
 
-              {/* Fees per Age Group */}
+              {/* Edit Prices Button */}
               <View style={styles.inputGroup}>
-      <Text style={styles.label}>{i18n.t('feesPerAgeGroup') || 'Fees per Age Group'}</Text>
-      <View style={styles.bubbleRow}>
-        {AGE_GROUPS.map(age => (
-          <View key={age} style={[styles.bubble, selected.includes(age) && styles.bubbleSelected]}>
-            <Text style={[styles.bubbleText, selected.includes(age) && styles.bubbleTextSelected]}>{age}</Text>
-            {selected.includes(age) ? (
-              <View style={styles.setRow}>
-                <TextInput
-                  style={[styles.priceInput, { marginTop: 0, flex: 1, minWidth: 40 }]}
-                  value={prices[age] || ''}
-                  onChangeText={v => handleEditPrice(age, v)}
-                  keyboardType="numeric"
-                  placeholder={i18n.t('feePlaceholder') || 'Fee'}
-                  placeholderTextColor="#999"
-                />
-                <TouchableOpacity onPress={() => handleRemoveAge(age)} style={{ marginLeft: 4 }}>
-                  <Ionicons name="close-circle" size={24} color="#ff3b30" />
+                <Text style={styles.label}>{i18n.t('feesPerAgeGroup') || 'Fees per Age Group'}</Text>
+                <TouchableOpacity
+                  style={{ backgroundColor: '#007AFF', borderRadius: 8, padding: 14, marginTop: 8, alignItems: 'center' }}
+                  onPress={() => router.push({ pathname: '/academy-edit-prices', params: { prices } })}
+                >
+                  <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 16 }}>{i18n.t('editPrices') || 'Edit Prices'}</Text>
                 </TouchableOpacity>
-              </View>
-            ) : settingAge === age ? (
-              <View style={styles.setRow}>
-                <TextInput
-                  style={[styles.priceInput, { marginTop: 0, flex: 1, minWidth: 40 }]}
-                  value={newPrice}
-                  onChangeText={setNewPrice}
-                  keyboardType="numeric"
-                  placeholder={i18n.t('feePlaceholder') || 'Fee'}
-                  placeholderTextColor="#999"
-                  autoFocus
-                />
-                <TouchableOpacity style={styles.setBtn} onPress={() => handleSaveAge(age)}>
-                  <Text style={styles.setBtnText}>{i18n.t('save') || 'Save'}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.setBtn} onPress={() => { setSettingAge(null); setNewPrice(''); }}>
-                  <Text style={styles.setBtnText}>{i18n.t('cancel') || 'Cancel'}</Text>
-                </TouchableOpacity>
-              </View>
-            ) : (
-              <TouchableOpacity style={styles.setBtn} onPress={() => handleSetAge(age)}>
-                <Text style={styles.setBtnText}>{i18n.t('set') || 'Set'}</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        ))}
-      </View>
               </View>
 
               {/* Private Trainings */}
@@ -584,6 +906,13 @@ export default function AcademyEditProfileScreen({ academyName: academyNameProp 
                   <Text style={styles.addTrainingBtnText}>{i18n.t('addAnotherTraining') || 'Add Private Training'}</Text>
                 </TouchableOpacity>
               </View>
+
+              {hasUnsavedChanges && (
+                <View style={styles.unsavedBanner}>
+                  <Ionicons name="alert-circle-outline" size={16} color="#7c2d12" />
+                  <Text style={styles.unsavedBannerText}>{i18n.t('unsavedChangesHint') || 'Changes are not saved yet.'}</Text>
+                </View>
+              )}
 
               <TouchableOpacity
                 style={[styles.saveButton, saving && styles.saveButtonDisabled]}
@@ -734,6 +1063,86 @@ const styles = StyleSheet.create({
     color: '#000',
     paddingVertical: 16,
   },
+  helperText: {
+    fontSize: 13,
+    color: '#666',
+    lineHeight: 18,
+    marginBottom: 10,
+  },
+  coordinateRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  mapActionsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  coordinateField: {
+    flex: 1,
+    minWidth: 140,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f5f5f5',
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#f5f5f5',
+    paddingHorizontal: 16,
+    minHeight: 56,
+  },
+  mapPickerButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#e5e7eb',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginBottom: 12,
+  },
+  mapPickerButtonText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#000',
+  },
+  locationAutofillButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    alignSelf: 'flex-start',
+    backgroundColor: '#f3f4f6',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginBottom: 12,
+  },
+  locationAutofillButtonDisabled: {
+    opacity: 0.7,
+  },
+  locationAutofillButtonText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#000',
+  },
+  mapStatusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#f9fafb',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginTop: 2,
+  },
+  mapStatusText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#111827',
+    fontWeight: '600',
+  },
   readOnlyText: {
     flex: 1,
     fontSize: 16,
@@ -882,6 +1291,25 @@ const styles = StyleSheet.create({
   },
   saveButtonDisabled: {
     opacity: 0.6,
+  },
+  unsavedBanner: {
+    marginTop: 8,
+    marginBottom: 12,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#ffedd5',
+    borderWidth: 1,
+    borderColor: '#fdba74',
+  },
+  unsavedBannerText: {
+    flex: 1,
+    color: '#7c2d12',
+    fontSize: 12,
+    fontWeight: '700',
   },
   scheduleRow: {
     flexDirection: 'row',

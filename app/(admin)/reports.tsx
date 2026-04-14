@@ -205,7 +205,13 @@ export default function AdminReportsScreen() {
     if (targetUserId) {
       try {
         const userSnap = await getDoc(doc(db, 'users', targetUserId));
-        setTargetUserSuspended(userSnap.exists() && userSnap.data()?.isSuspended === true);
+        const targetUser = userSnap.exists() ? userSnap.data() : null;
+        setTargetUserSuspended(
+          !!targetUser && (
+            targetUser?.isSuspended === true ||
+            String(targetUser?.status || '').toLowerCase() === 'suspended'
+          )
+        );
       } catch {
         setTargetUserSuspended(false);
       }
@@ -308,8 +314,32 @@ export default function AdminReportsScreen() {
     );
   }
 
+  const openCount = reports.filter((r) => r.status === 'open').length;
+  const reviewedCount = reports.filter((r) => r.status === 'reviewed').length;
+  const resolvedCount = reports.filter((r) => r.status === 'resolved').length;
+
   return (
     <View style={styles.container}>
+      <View style={styles.headerBlock}>
+        <Text style={styles.pageTitle}>Reports</Text>
+        <Text style={styles.pageSubTitle}>Review, resolve, and document moderation actions.</Text>
+      </View>
+
+      <View style={styles.summaryRow}>
+        <View style={styles.summaryCard}>
+          <Text style={styles.summaryLabel}>Open</Text>
+          <Text style={[styles.summaryValue, { color: '#dc2626' }]}>{openCount}</Text>
+        </View>
+        <View style={styles.summaryCard}>
+          <Text style={styles.summaryLabel}>Reviewed</Text>
+          <Text style={[styles.summaryValue, { color: '#d97706' }]}>{reviewedCount}</Text>
+        </View>
+        <View style={styles.summaryCard}>
+          <Text style={styles.summaryLabel}>Resolved</Text>
+          <Text style={[styles.summaryValue, { color: '#16a34a' }]}>{resolvedCount}</Text>
+        </View>
+      </View>
+
       {/* Filter Tabs */}
       <View style={styles.filterContainer}>
         <TouchableOpacity
@@ -317,7 +347,7 @@ export default function AdminReportsScreen() {
           onPress={() => setStatusFilter('open')}
         >
           <Text style={[styles.filterText, statusFilter === 'open' && styles.filterTextActive]}>
-            {i18n.t('filterOpen')} ({reports.filter(r => r.status === 'open').length})
+            {i18n.t('filterOpen')} ({openCount})
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
@@ -476,100 +506,144 @@ export default function AdminReportsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#f0f4f8',
+  },
+  headerBlock: {
+    paddingTop: 56,
+    paddingHorizontal: 16,
+    paddingBottom: 10,
+  },
+  pageTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#1e293b',
+  },
+  pageSubTitle: {
+    marginTop: 2,
+    fontSize: 13,
+    color: '#64748b',
+  },
+  summaryRow: {
+    flexDirection: 'row',
+    gap: 10,
+    paddingHorizontal: 16,
+    marginBottom: 10,
+  },
+  summaryCard: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+  },
+  summaryLabel: {
+    fontSize: 11,
+    color: '#94a3b8',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  summaryValue: {
+    marginTop: 2,
+    fontSize: 18,
+    fontWeight: '800',
   },
   filterContainer: {
     flexDirection: 'row',
-    backgroundColor: '#fff',
-    paddingVertical: 12,
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    marginHorizontal: 16,
+    paddingVertical: 10,
     paddingHorizontal: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    marginBottom: 10,
   },
   filterTab: {
     flex: 1,
     paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
+    paddingHorizontal: 10,
+    borderRadius: 999,
     marginHorizontal: 4,
     alignItems: 'center',
   },
   filterTabActive: {
-    backgroundColor: '#007AFF',
+    backgroundColor: '#111827',
   },
   filterText: {
-    fontSize: 14,
-    color: '#666',
-    fontWeight: '500',
+    fontSize: 12,
+    color: '#64748b',
+    fontWeight: '700',
   },
   filterTextActive: {
     color: '#fff',
-    fontWeight: '600',
+    fontWeight: '800',
   },
   listContent: {
     padding: 16,
+    paddingBottom: 32,
   },
   reportCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
     marginBottom: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
   },
   reportHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 10,
   },
   reportHeaderLeft: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    flex: 1,
   },
   reportType: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#000',
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1e293b',
   },
   statusBadge: {
     paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
+    paddingVertical: 3,
+    borderRadius: 999,
   },
   statusopen: {
-    backgroundColor: '#FFE5E5',
+    backgroundColor: '#fef2f2',
   },
   statusreviewed: {
-    backgroundColor: '#FFF4E5',
+    backgroundColor: '#fffbeb',
   },
   statusresolved: {
-    backgroundColor: '#E5F5E5',
+    backgroundColor: '#f0fdf4',
   },
   statusText: {
-    fontSize: 12,
-    fontWeight: '600',
+    fontSize: 10,
+    fontWeight: '800',
     textTransform: 'uppercase',
+    letterSpacing: 0.4,
   },
   reportDate: {
-    fontSize: 12,
-    color: '#999',
+    fontSize: 11,
+    color: '#94a3b8',
   },
   reportReason: {
     fontSize: 14,
-    color: '#333',
+    color: '#334155',
     marginBottom: 8,
   },
   label: {
-    fontWeight: '600',
+    fontWeight: '700',
   },
   reportDetails: {
-    fontSize: 14,
-    color: '#666',
+    fontSize: 13,
+    color: '#64748b',
     marginBottom: 12,
   },
   mediaPreview: {
@@ -578,17 +652,17 @@ const styles = StyleSheet.create({
   },
   mediaThumbnail: {
     width: '100%',
-    height: 200,
-    borderRadius: 8,
+    height: 190,
+    borderRadius: 12,
     marginBottom: 8,
   },
   caption: {
-    fontSize: 14,
-    color: '#666',
+    fontSize: 13,
+    color: '#64748b',
   },
   reportedUser: {
-    fontSize: 14,
-    color: '#333',
+    fontSize: 13,
+    color: '#334155',
     marginBottom: 8,
   },
   reportFooter: {
@@ -596,9 +670,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginTop: 8,
-    paddingTop: 12,
+    paddingTop: 10,
     borderTopWidth: 1,
-    borderTopColor: '#f0f0f0',
+    borderTopColor: '#e2e8f0',
   },
   reporterInfoContainer: {
     flexDirection: 'row',
@@ -607,33 +681,36 @@ const styles = StyleSheet.create({
   },
   reporterInfo: {
     fontSize: 12,
-    color: '#666',
+    color: '#64748b',
   },
   centerContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    paddingHorizontal: 24,
   },
   loadingText: {
     marginTop: 12,
     fontSize: 14,
-    color: '#666',
+    color: '#64748b',
   },
   emptyText: {
     marginTop: 16,
     fontSize: 16,
-    color: '#999',
+    color: '#94a3b8',
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(15, 23, 42, 0.45)',
     justifyContent: 'flex-end',
   },
   modalContainer: {
-    backgroundColor: '#fff',
+    backgroundColor: '#ffffff',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     maxHeight: '90%',
+    borderTopWidth: 1,
+    borderColor: '#e2e8f0',
   },
   modalHeader: {
     flexDirection: 'row',
@@ -641,36 +718,38 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 20,
     borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
+    borderBottomColor: '#e2e8f0',
   },
   modalTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#000',
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#1e293b',
   },
   modalContent: {
     padding: 20,
   },
   modalLabel: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#000',
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1e293b',
     marginTop: 16,
     marginBottom: 8,
   },
   modalText: {
-    fontSize: 14,
-    color: '#666',
+    fontSize: 13,
+    color: '#64748b',
     marginBottom: 8,
+    lineHeight: 18,
   },
   noteInput: {
     borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
+    borderColor: '#dbe3ee',
+    borderRadius: 12,
     padding: 12,
     fontSize: 14,
     minHeight: 80,
     marginBottom: 16,
+    backgroundColor: '#f8fafc',
   },
   actionButtons: {
     gap: 12,
@@ -680,29 +759,29 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 16,
-    borderRadius: 8,
+    padding: 14,
+    borderRadius: 12,
     gap: 8,
   },
   removeButton: {
-    backgroundColor: '#FF3B30',
+    backgroundColor: '#dc2626',
   },
   suspendButton: {
-    backgroundColor: '#FF9500',
+    backgroundColor: '#d97706',
   },
   unsuspendButton: {
-    backgroundColor: '#34C759',
+    backgroundColor: '#16a34a',
   },
   reviewButton: {
-    backgroundColor: '#007AFF',
+    backgroundColor: '#2563eb',
   },
   dismissButton: {
-    backgroundColor: '#8E8E93',
+    backgroundColor: '#64748b',
   },
   actionButtonText: {
     color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 14,
+    fontWeight: '700',
   },
   loadingOverlay: {
     position: 'absolute',
@@ -710,7 +789,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: 'rgba(255, 255, 255, 0.8)',
+    backgroundColor: 'rgba(255, 255, 255, 0.72)',
     justifyContent: 'center',
     alignItems: 'center',
   },

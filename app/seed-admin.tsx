@@ -13,6 +13,11 @@ export default function SeedAdmin() {
     const router = useRouter();
 
     const handleSeed = async () => {
+        if (!__DEV__) {
+            Alert.alert("Unavailable", "Admin seeding is disabled in production builds.");
+            return;
+        }
+
         if (!email || !password) {
             Alert.alert("Error", "Please provide email and password");
             return;
@@ -34,6 +39,13 @@ export default function SeedAdmin() {
                 createdAt: new Date().toISOString()
             });
 
+            // 3. Keep the legacy admin allowlist in sync for stricter rule paths
+            await setDoc(doc(db, 'admins', user.uid), {
+                uid: user.uid,
+                email,
+                createdAt: new Date().toISOString(),
+            });
+
             Alert.alert("Success", "Admin account created successfully. You can now log in.");
             router.replace('/signin');
         } catch (error: any) {
@@ -48,7 +60,8 @@ export default function SeedAdmin() {
         <LinearGradient colors={['#000', '#222']} style={styles.container}>
             <View style={styles.card}>
                 <Text style={styles.title}>Seed Admin Account</Text>
-                <Text style={styles.subtitle}>Use this once to create your primary admin account.</Text>
+                <Text style={styles.subtitle}>Use this once in development to create your primary admin account.</Text>
+                {!__DEV__ && <Text style={[styles.subtitle, { color: '#c0392b', marginBottom: 16 }]}>Disabled in production for security.</Text>}
 
                 <TextInput
                     style={styles.input}
@@ -72,7 +85,7 @@ export default function SeedAdmin() {
                 <TouchableOpacity
                     style={[styles.button, loading && styles.disabled]}
                     onPress={handleSeed}
-                    disabled={loading}
+                    disabled={loading || !__DEV__}
                 >
                     {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Create Admin</Text>}
                 </TouchableOpacity>

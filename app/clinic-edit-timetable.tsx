@@ -22,28 +22,8 @@ const ClinicEditTimetableScreen = () => {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    const fetchTimetable = async () => {
-      if (!auth.currentUser) {
-        setLoading(false);
-        return;
-      }
-      try {
-        const docRef = doc(db, 'clinics', auth.currentUser.uid);
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-          const data = docSnap.data();
-          if (data.workingHours) {
-            setWorkingHours(data.workingHours);
-          }
-        }
-      } catch (err) {
-        console.error("Error fetching timetable", err);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchTimetable();
-  }, []);
+    router.replace('/clinic-edit-services');
+  }, [router]);
 
   // Removed fade animation to prevent color glitch on screen load
   // Screen now renders with correct colors immediately

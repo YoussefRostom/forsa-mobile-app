@@ -6,6 +6,7 @@ import { Animated, Easing, KeyboardAvoidingView, Platform, ScrollView, StyleShee
 import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import i18n from '../locales/i18n';
+import { getBookingStatusMeta, matchesBookingStatusFilter } from '../lib/bookingStatus';
 import { db, auth } from '../lib/firebase';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { startConversationWithUser } from '../services/BookingMessagingService';
@@ -25,16 +26,28 @@ type BookingItem = {
   status: string;
   price?: number;
   createdAt?: string;
+  updatedAt?: string;
 };
 
 export default function ClinicBookingsScreen() {
   const { openMenu } = useHamburgerMenu();
-  const [filter, setFilter] = useState<'all' | 'confirmed' | 'pending' | 'cancelled'>('all');
+  const [filter, setFilter] = useState<'all' | 'confirmed' | 'pending' | 'new_time_proposed' | 'cancelled'>('all');
   const router = useRouter();
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const [bookings, setBookings] = useState<BookingItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+
+  const getBookingSortTime = (booking: BookingItem): number => {
+    const source: any = booking?.updatedAt ?? booking?.createdAt;
+    if (!source) return 0;
+    if (typeof source?.toDate === 'function') {
+      return source.toDate().getTime();
+    }
+    if (typeof source === 'number') return source;
+    const parsed = new Date(source).getTime();
+    return Number.isNaN(parsed) ? 0 : parsed;
+  };
 
   const fetchBookings = async () => {
     const user = auth.currentUser;
@@ -68,13 +81,12 @@ export default function ClinicBookingsScreen() {
           status: d.status || 'pending',
           price: d.price,
           createdAt: d.createdAt,
+          updatedAt: d.updatedAt,
         });
       });
 
       list.sort((a, b) => {
-        const tA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-        const tB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-        return tB - tA;
+        return getBookingSortTime(b) - getBookingSortTime(a);
       });
 
       setBookings(list);
@@ -111,35 +123,9 @@ export default function ClinicBookingsScreen() {
     fetchBookings();
   }, []);
 
-  const filteredBookings = filter === 'all'
-    ? bookings
-    : bookings.filter(b => b.status === filter);
+  const filteredBookings = bookings.filter(b => matchesBookingStatusFilter(b.status, filter));
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'confirmed':
-        return '#10b981';
-      case 'pending':
-        return '#f59e0b';
-      case 'cancelled':
-        return '#ef4444';
-      default:
-        return '#666';
-    }
-  };
-
-  const getStatusText = (status: string) => {
-    switch (status) {
-      case 'confirmed':
-        return i18n.t('confirmed') || 'Confirmed';
-      case 'pending':
-        return i18n.t('pending') || 'Pending';
-      case 'cancelled':
-        return i18n.t('cancelled') || 'Cancelled';
-      default:
-        return status;
-    }
-  };
+  const getStatusMeta = (status: string) => getBookingStatusMeta(status, i18n);
 
   const displayName = (b: BookingItem) => b.patientName || b.customerName || '—';
 
@@ -155,7 +141,7 @@ export default function ClinicBookingsScreen() {
             <TouchableOpacity style={styles.menuButton} onPress={openMenu}>
               <Ionicons name="menu" size={24} color="#fff" />
             </TouchableOpacity>
-            <View style={styles.headerContent}>
+            <View style={styles.headerContent} pointerEvents="box-none">
               <Text style={styles.headerTitle}>{i18n.t('myBookings') || 'My Bookings'}</Text>
               <Text style={styles.headerSubtitle}>{i18n.t('manageAppointments') || 'Manage patient appointments'}</Text>
             </View>
@@ -186,6 +172,15 @@ export default function ClinicBookingsScreen() {
               <Ionicons name="time" size={18} color={filter === 'pending' ? '#fff' : '#666'} />
               <Text style={[styles.filterButtonText, filter === 'pending' && styles.filterButtonTextActive]}>
                 {i18n.t('pending') || 'Pending'}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.filterButton, filter === 'new_time_proposed' && styles.filterButtonActive]}
+              onPress={() => setFilter('new_time_proposed')}
+            >
+              <Ionicons name="swap-horizontal" size={18} color={filter === 'new_time_proposed' ? '#fff' : '#666'} />
+              <Text style={[styles.filterButtonText, filter === 'new_time_proposed' && styles.filterButtonTextActive]}>
+                {i18n.t('newTimeProposed') || 'New Time'}
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -227,10 +222,16 @@ export default function ClinicBookingsScreen() {
                           <Text style={styles.patientName}>{displayName(booking)}</Text>
                         </View>
                       </View>
-                      <View style={[styles.statusBadge, { backgroundColor: getStatusColor(booking.status) }]}>
-                        <Text style={styles.statusText}>{getStatusText(booking.status)}</Text>
+                      <View style={[styles.statusBadge, { backgroundColor: getStatusMeta(booking.status).color }]}>
+                        <Text style={styles.statusText}>{getStatusMeta(booking.status).label}</Text>
                       </View>
                     </View>
+
+                    {getStatusMeta(booking.status).note ? (
+                      <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, marginBottom: 12, lineHeight: 18 }}>
+                        {getStatusMeta(booking.status).note}
+                      </Text>
+                    ) : null}
 
                     <View style={styles.bookingDetails}>
                       {(booking.service || booking.doctor) && (
@@ -314,6 +315,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 16,
+    zIndex: 10,
+    elevation: 10,
   },
   headerContent: {
     flex: 1,

@@ -3,6 +3,162 @@ import { db, auth } from '../lib/firebase';
 import { getOrCreateConversation } from './MessagingService';
 import { getCurrentUserRole } from './UserRoleService';
 
+const ROLE_COLLECTION_MAP: Record<string, string> = {
+  player: 'players',
+  parent: 'parents',
+  academy: 'academies',
+  clinic: 'clinics',
+  agent: 'agents',
+  admin: 'users',
+};
+
+function inferRoleFromCollection(collectionName: string, fallbackRole?: string): string {
+  if (fallbackRole) return fallbackRole;
+
+  switch (collectionName) {
+    case 'players':
+      return 'player';
+    case 'parents':
+      return 'parent';
+    case 'academies':
+      return 'academy';
+    case 'clinics':
+      return 'clinic';
+    case 'agents':
+      return 'agent';
+    default:
+      return 'unknown';
+  }
+}
+
+function getDisplayName(userData: any, roleHint?: string): string {
+  const role = String(userData?.role || roleHint || '').toLowerCase();
+
+  if (role === 'academy') {
+    return userData?.academyName || userData?.name || userData?.firstName || 'Academy';
+  }
+
+  if (role === 'clinic') {
+    return userData?.clinicName || userData?.name || userData?.firstName || 'Clinic';
+  }
+
+  const fullName = [userData?.firstName, userData?.lastName].filter(Boolean).join(' ').trim();
+  return fullName || userData?.parentName || userData?.agentName || userData?.name || 'Unknown';
+}
+
+async function getUserProfileWithFallback(
+  userId: string,
+  expectedRole?: string
+): Promise<{ userId: string; name: string; photo?: string; role: string; createdAt?: string } | null> {
+  const collectionsToTry = [
+    'users',
+    ...(expectedRole && ROLE_COLLECTION_MAP[expectedRole] ? [ROLE_COLLECTION_MAP[expectedRole]] : []),
+    'players',
+    'parents',
+    'academies',
+    'clinics',
+    'agents',
+  ].filter((value, index, array) => array.indexOf(value) === index);
+
+  for (const collectionName of collectionsToTry) {
+    try {
+      const userSnap = await getDoc(doc(db, collectionName, userId));
+      if (!userSnap.exists()) continue;
+
+      const userData = userSnap.data();
+      const resolvedRole = String(userData?.role || inferRoleFromCollection(collectionName, expectedRole)).toLowerCase();
+
+      return {
+        userId,
+        name: getDisplayName(userData, resolvedRole),
+        photo: userData?.profilePhoto,
+        role: resolvedRole,
+        createdAt: userData?.createdAt,
+      };
+    } catch (error) {
+      console.warn(`[BookingMessagingService] Unable to read ${collectionName}/${userId}:`, error);
+    }
+  }
+
+  return null;
+}
+
+async function getAgentSupportUsers(): Promise<Array<{ userId: string; name: string; photo?: string; role: string; lastBookingDate?: string }>> {
+  try {
+    const agentsRef = collection(db, 'users');
+    const agentsQuery = query(agentsRef, where('role', '==', 'agent'));
+    const agentsSnapshot = await getDocs(agentsQuery);
+
+    if (!agentsSnapshot.empty) {
+      return agentsSnapshot.docs.map((docSnap) => {
+        const agentData = docSnap.data();
+        return {
+          userId: docSnap.id,
+          name: agentData.firstName && agentData.lastName
+            ? `${agentData.firstName} ${agentData.lastName} (Customer Support)`
+            : agentData.firstName || agentData.lastName || agentData.name || 'Customer Support',
+          photo: agentData.profilePhoto,
+          role: 'agent',
+          lastBookingDate: agentData.createdAt,
+        };
+      });
+    }
+  } catch (error) {
+    console.warn('[BookingMessagingService] Falling back to agents collection for support users:', error);
+  }
+
+  try {
+    const agentsSnapshot = await getDocs(collection(db, 'agents'));
+    return agentsSnapshot.docs.map((docSnap) => {
+      const agentData = docSnap.data();
+      return {
+        userId: docSnap.id,
+        name: agentData.firstName && agentData.lastName
+          ? `${agentData.firstName} ${agentData.lastName} (Customer Support)`
+          : agentData.firstName || agentData.lastName || agentData.name || 'Customer Support',
+        photo: agentData.profilePhoto,
+        role: 'agent',
+        lastBookingDate: agentData.createdAt,
+      };
+    });
+  } catch (error) {
+    console.warn('[BookingMessagingService] Unable to load support agents:', error);
+    return [];
+  }
+}
+
+async function getAgentReachableUsers(): Promise<Array<{ userId: string; name: string; photo?: string; role: string; lastBookingDate?: string }>> {
+  const collectionsToLoad = [
+    { collectionName: 'players', role: 'player' },
+    { collectionName: 'parents', role: 'parent' },
+    { collectionName: 'academies', role: 'academy' },
+    { collectionName: 'clinics', role: 'clinic' },
+  ];
+
+  const results = await Promise.all(
+    collectionsToLoad.map(async ({ collectionName, role }) => {
+      try {
+        const snapshot = await getDocs(collection(db, collectionName));
+        return snapshot.docs.map((docSnap) => {
+          const userData = docSnap.data();
+          return {
+            userId: docSnap.id,
+            name: getDisplayName({ ...userData, role }, role),
+            photo: userData.profilePhoto,
+            role,
+            lastBookingDate: userData.createdAt,
+          };
+        });
+      } catch (error) {
+        console.warn(`[BookingMessagingService] Unable to load ${collectionName}:`, error);
+        return [];
+      }
+    })
+  );
+
+  return results.flat();
+}
+
 /**
  * Get users that the current user can chat with based on bookings
  * For Players/Parents: Can chat with academies/clinics they've booked
@@ -67,50 +223,28 @@ export async function getChattableUsers(): Promise<Array<{
       // Fetch provider details and verify they match the booking type
       for (const providerId of providerIds) {
         try {
-          const userRef = doc(db, 'users', providerId);
-          const userSnap = await getDoc(userRef);
-          if (userSnap.exists()) {
-            const userData = userSnap.data();
-            const bookingInfo = providerMap.get(providerId);
-            const providerRole = userData.role;
-            
-            // Only include if the provider's role matches the booking type
-            // This ensures clinics only show for clinic bookings, academies only for academy bookings
-            if (bookingInfo && 
-                ((bookingInfo.type === 'clinic' && providerRole === 'clinic') ||
-                 (bookingInfo.type === 'academy' && providerRole === 'academy'))) {
-              chattableUsers.push({
-                userId: providerId,
-                name: userData.academyName || userData.clinicName || userData.firstName || userData.name || 'Unknown',
-                photo: userData.profilePhoto,
-                role: providerRole || 'unknown',
-                bookingId: bookingInfo.bookingId,
-                lastBookingDate: bookingInfo.date
-              });
-            }
+          const bookingInfo = providerMap.get(providerId);
+          const providerProfile = await getUserProfileWithFallback(providerId, bookingInfo?.type);
+
+          if (bookingInfo && providerProfile &&
+              ((bookingInfo.type === 'clinic' && providerProfile.role === 'clinic') ||
+               (bookingInfo.type === 'academy' && providerProfile.role === 'academy'))) {
+            chattableUsers.push({
+              userId: providerId,
+              name: providerProfile.name,
+              photo: providerProfile.photo,
+              role: providerProfile.role || 'unknown',
+              bookingId: bookingInfo.bookingId,
+              lastBookingDate: bookingInfo.date
+            });
           }
         } catch (error) {
           console.error(`Error fetching provider ${providerId}:`, error);
         }
       }
 
-      // Also add all agents as customer support (always available)
-      const agentsRef = collection(db, 'users');
-      const agentsQuery = query(agentsRef, where('role', '==', 'agent'));
-      const agentsSnapshot = await getDocs(agentsQuery);
-      
-      agentsSnapshot.forEach((docSnap) => {
-        const agentData = docSnap.data();
-        chattableUsers.push({
-          userId: docSnap.id,
-          name: agentData.firstName && agentData.lastName
-            ? `${agentData.firstName} ${agentData.lastName} (Customer Support)`
-            : agentData.firstName || agentData.lastName || agentData.name || 'Customer Support',
-          photo: agentData.profilePhoto,
-          role: 'agent',
-          lastBookingDate: agentData.createdAt
-        });
-      });
+      const supportAgents = await getAgentSupportUsers();
+      chattableUsers.push(...supportAgents);
     } else if (role === 'academy' || role === 'clinic') {
       // Academies/Clinics can chat with players/parents who booked them
       // IMPORTANT: Only show customers who have bookings with the specific type (clinic or academy)
@@ -148,79 +282,32 @@ export async function getChattableUsers(): Promise<Array<{
       // Fetch customer details - only include players/parents who have bookings
       for (const customerId of customerIds) {
         try {
-          const userRef = doc(db, 'users', customerId);
-          const userSnap = await getDoc(userRef);
-          if (userSnap.exists()) {
-            const userData = userSnap.data();
-            const bookingInfo = customerMap.get(customerId);
-            
-            // Verify: only include if customer is a player or parent, and has a valid booking
-            if (bookingInfo && (userData.role === 'player' || userData.role === 'parent')) {
-              chattableUsers.push({
-                userId: customerId,
-                name: userData.firstName && userData.lastName
-                  ? `${userData.firstName} ${userData.lastName}`
-                  : userData.firstName || userData.lastName || userData.name || 'Unknown',
-                photo: userData.profilePhoto,
-                role: userData.role || 'unknown',
-                bookingId: bookingInfo.bookingId,
-                lastBookingDate: bookingInfo.date
-              });
-            }
+          const bookingInfo = customerMap.get(customerId);
+          const customerProfile = await getUserProfileWithFallback(customerId);
+
+          if (bookingInfo && customerProfile && (customerProfile.role === 'player' || customerProfile.role === 'parent')) {
+            chattableUsers.push({
+              userId: customerId,
+              name: customerProfile.name,
+              photo: customerProfile.photo,
+              role: customerProfile.role || 'unknown',
+              bookingId: bookingInfo.bookingId,
+              lastBookingDate: bookingInfo.date
+            });
           }
         } catch (error) {
           console.error(`Error fetching customer ${customerId}:`, error);
         }
       }
 
-      // Also add all agents as customer support (always available)
-      const agentsRef = collection(db, 'users');
-      const agentsQuery = query(agentsRef, where('role', '==', 'agent'));
-      const agentsSnapshot = await getDocs(agentsQuery);
-      
-      agentsSnapshot.forEach((docSnap) => {
-        const agentData = docSnap.data();
-        chattableUsers.push({
-          userId: docSnap.id,
-          name: agentData.firstName && agentData.lastName
-            ? `${agentData.firstName} ${agentData.lastName} (Customer Support)`
-            : agentData.firstName || agentData.lastName || agentData.name || 'Customer Support',
-          photo: agentData.profilePhoto,
-          role: 'agent',
-          lastBookingDate: agentData.createdAt
-        });
-      });
+      const supportAgents = await getAgentSupportUsers();
+      chattableUsers.push(...supportAgents);
     } else if (role === 'agent') {
       // Agents can chat with all users (players, parents, academies, clinics) - customer support style
-      const usersRef = collection(db, 'users');
-      const usersQuery = query(
-        usersRef,
-        where('role', 'in', ['player', 'parent', 'academy', 'clinic'])
+      const reachableUsers = await getAgentReachableUsers();
+      chattableUsers.push(
+        ...reachableUsers.filter((user) => user.userId !== currentUser.uid)
       );
-      const snapshot = await getDocs(usersQuery);
-
-      snapshot.forEach((docSnap) => {
-        const userData = docSnap.data();
-        let displayName = 'Unknown';
-        
-        if (userData.role === 'player' || userData.role === 'parent') {
-          displayName = userData.firstName && userData.lastName
-            ? `${userData.firstName} ${userData.lastName}`
-            : userData.firstName || userData.lastName || userData.name || 'Unknown';
-        } else if (userData.role === 'academy') {
-          displayName = userData.academyName || userData.firstName || userData.name || 'Academy';
-        } else if (userData.role === 'clinic') {
-          displayName = userData.clinicName || userData.firstName || userData.name || 'Clinic';
-        }
-        
-        chattableUsers.push({
-          userId: docSnap.id,
-          name: displayName,
-          photo: userData.profilePhoto,
-          role: userData.role || 'unknown',
-          lastBookingDate: userData.createdAt
-        });
-      });
     }
 
     return chattableUsers;
@@ -250,23 +337,15 @@ export async function canChatWithUser(otherUserId: string): Promise<boolean> {
     const role = await getCurrentUserRole();
 
     // First, check if the other user is an agent - agents are always available for all users
-    const otherUserRef = doc(db, 'users', otherUserId);
-    const otherUserSnap = await getDoc(otherUserRef);
-    if (otherUserSnap.exists()) {
-      const otherUserData = otherUserSnap.data();
-      if (otherUserData.role === 'agent') {
-        // Agents can always be chatted with by anyone (customer support)
-        return true;
-      }
+    const otherUserProfile = await getUserProfileWithFallback(otherUserId);
+    if (otherUserProfile?.role === 'agent') {
+      // Agents can always be chatted with by anyone (customer support)
+      return true;
     }
 
     if (role === 'agent') {
       // Agents can chat with all users (players, parents, academies, clinics)
-      if (otherUserSnap.exists()) {
-        const userData = otherUserSnap.data();
-        return ['player', 'parent', 'academy', 'clinic'].includes(userData.role);
-      }
-      return false;
+      return ['player', 'parent', 'academy', 'clinic'].includes(otherUserProfile?.role || '');
     }
 
     // For others, check if there's a booking relationship

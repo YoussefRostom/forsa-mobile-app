@@ -6,16 +6,20 @@ import { Animated, Easing, KeyboardAvoidingView, Platform, ScrollView, StyleShee
 import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import i18n from '../locales/i18n';
+import { getBookingStatusMeta, matchesBookingStatusFilter } from '../lib/bookingStatus';
+import { notifyBookingStatusChange } from '../lib/bookingNotifications';
 import { db, auth } from '../lib/firebase';
-import { collection, query, where, getDocs, updateDoc, doc, orderBy } from 'firebase/firestore';
+import { collection, query, where, getDocs, updateDoc, doc, orderBy, serverTimestamp } from 'firebase/firestore';
 import { startConversationWithUser } from '../services/BookingMessagingService';
 import { findAdminUserId } from '../services/MessagingService';
+import { upsertBookingTransaction } from '../services/MonetizationService';
 
 type BookingItem = {
   id: string;
   type: 'academy' | 'clinic';
   status: string;
   createdAt?: string;
+  updatedAt?: string;
   playerName?: string;
   playerId?: string;
   parentId?: string;
@@ -37,12 +41,24 @@ type BookingItem = {
 
 export default function AcademyBookingsScreen() {
   const { openMenu } = useHamburgerMenu();
-  const [filter, setFilter] = useState<'all' | 'confirmed' | 'pending' | 'cancelled'>('all');
+  const [filter, setFilter] = useState<'all' | 'confirmed' | 'pending' | 'new_time_proposed' | 'cancelled'>('all');
   const router = useRouter();
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const [bookings, setBookings] = useState<BookingItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [actionLoading, setActionLoading] = useState<{ id: string; type: 'accept' | 'reject' } | null>(null);
+
+  const getBookingSortTime = (booking: BookingItem): number => {
+    const source: any = booking?.updatedAt ?? booking?.createdAt;
+    if (!source) return 0;
+    if (typeof source?.toDate === 'function') {
+      return source.toDate().getTime();
+    }
+    if (typeof source === 'number') return source;
+    const parsed = new Date(source).getTime();
+    return Number.isNaN(parsed) ? 0 : parsed;
+  };
 
   const fetchBookings = async () => {
     const user = auth.currentUser;
@@ -71,6 +87,7 @@ export default function AcademyBookingsScreen() {
             type: 'academy',
             status: d.status || 'pending',
             createdAt: d.createdAt,
+            updatedAt: d.updatedAt,
             playerName: d.playerName || d.customerName,
             playerId: d.playerId,
             parentId: d.parentId,
@@ -105,6 +122,7 @@ export default function AcademyBookingsScreen() {
             type: 'clinic',
             status: d.status || 'pending',
             createdAt: d.createdAt,
+            updatedAt: d.updatedAt,
             providerName: d.providerName || d.name,
             doctor: d.doctor,
             service: d.service,
@@ -120,9 +138,7 @@ export default function AcademyBookingsScreen() {
       }
 
       all.sort((a, b) => {
-        const tA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-        const tB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-        return tB - tA;
+        return getBookingSortTime(b) - getBookingSortTime(a);
       });
 
       setBookings(all);
@@ -135,37 +151,51 @@ export default function AcademyBookingsScreen() {
     }
   };
 
-  const findAdminUserId = async () => {
-    try {
-      const adminQuery = query(collection(db, 'users'), where('role', '==', 'admin'));
-      const adminSnapshot = await getDocs(adminQuery);
-      if (!adminSnapshot.empty) {
-        return adminSnapshot.docs[0].id;
-      }
-    } catch (error) {
-      console.error('Error finding admin:', error);
+  const runBookingAction = async (
+    bookingId: string,
+    nextStatus: 'confirmed' | 'cancelled',
+    successMessage: string,
+    actionType: 'accept' | 'reject'
+  ) => {
+    if (actionLoading) {
+      return;
     }
-    return null;
+
+    try {
+      setActionLoading({ id: bookingId, type: actionType });
+      const localUpdatedAt = new Date().toISOString();
+      await updateDoc(doc(db, 'bookings', bookingId), { status: nextStatus, updatedAt: serverTimestamp() });
+      const currentBooking = bookings.find(b => b.id === bookingId);
+      const updatedBooking = currentBooking ? { ...currentBooking, status: nextStatus, updatedAt: localUpdatedAt } : null;
+      setBookings(prev => prev
+        .map(b => b.id === bookingId ? { ...b, status: nextStatus, updatedAt: localUpdatedAt } : b)
+        .sort((a, b) => getBookingSortTime(b) - getBookingSortTime(a))
+      );
+      if (updatedBooking) {
+        await upsertBookingTransaction(bookingId, updatedBooking, auth.currentUser?.uid, `Academy updated booking to ${nextStatus}`);
+      }
+      if (currentBooking) {
+        await notifyBookingStatusChange({
+          booking: { ...currentBooking, status: nextStatus },
+          nextStatus,
+          actorId: auth.currentUser?.uid,
+          actorLabel: i18n.t('academy') || 'Academy',
+        });
+      }
+      Alert.alert(i18n.t('success') || 'Success', successMessage);
+    } catch (err: any) {
+      Alert.alert(i18n.t('error') || 'Error', i18n.t('failedToUpdateTiming') || 'Failed to update timing');
+    } finally {
+      setActionLoading(null);
+    }
   };
 
   const handleAcceptTiming = async (bookingId: string) => {
-    try {
-      await updateDoc(doc(db, 'bookings', bookingId), { status: 'player_accepted' });
-      Alert.alert(i18n.t('success') || 'Success', 'Timing accepted successfully');
-      setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, status: 'player_accepted' } : b));
-    } catch (err: any) {
-      Alert.alert('Error', 'Failed to accept timing');
-    }
+    await runBookingAction(bookingId, 'confirmed', i18n.t('timingAcceptedSuccess') || 'Timing accepted successfully', 'accept');
   };
 
   const handleRejectTiming = async (bookingId: string) => {
-    try {
-      await updateDoc(doc(db, 'bookings', bookingId), { status: 'player_rejected' });
-      Alert.alert(i18n.t('success') || 'Success', 'Timing rejected successfully');
-      setBookings(prev => prev.map(b => b.id === bookingId ? { ...b, status: 'player_rejected' } : b));
-    } catch (err: any) {
-      Alert.alert('Error', 'Failed to reject timing');
-    }
+    await runBookingAction(bookingId, 'cancelled', i18n.t('timingRejectedSuccess') || 'Timing rejected successfully', 'reject');
   };
 
   useEffect(() => {
@@ -179,47 +209,9 @@ export default function AcademyBookingsScreen() {
     fetchBookings();
   }, []);
 
-  const filteredBookings = filter === 'all'
-    ? bookings
-    : bookings.filter(b => b.status === filter);
+  const filteredBookings = bookings.filter(b => matchesBookingStatusFilter(b.status, filter));
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'confirmed':
-        return '#10b981';
-      case 'player_accepted':
-        return '#10b981';
-      case 'pending':
-        return '#f59e0b';
-      case 'timing_proposed':
-        return '#f59e0b';
-      case 'cancelled':
-        return '#ef4444';
-      case 'player_rejected':
-        return '#ef4444';
-      default:
-        return '#666';
-    }
-  };
-
-  const getStatusText = (status: string) => {
-    switch (status) {
-      case 'confirmed':
-        return i18n.t('confirmed') || 'Confirmed';
-      case 'player_accepted':
-        return i18n.t('accepted') || 'Accepted';
-      case 'pending':
-        return i18n.t('pending') || 'Pending';
-      case 'timing_proposed':
-        return i18n.t('timingProposed') || 'Timing Proposed';
-      case 'cancelled':
-        return i18n.t('cancelled') || 'Cancelled';
-      case 'player_rejected':
-        return i18n.t('rejected') || 'Rejected';
-      default:
-        return status;
-    }
-  };
+  const getStatusMeta = (status: string) => getBookingStatusMeta(status, i18n);
 
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -233,7 +225,7 @@ export default function AcademyBookingsScreen() {
             <TouchableOpacity style={styles.menuButton} onPress={openMenu}>
               <Ionicons name="menu" size={24} color="#fff" />
             </TouchableOpacity>
-            <View style={styles.headerContent}>
+            <View style={styles.headerContent} pointerEvents="box-none">
               <Text style={styles.headerTitle}>{i18n.t('myBookings') || 'My Bookings'}</Text>
               <Text style={styles.headerSubtitle}>{i18n.t('manageReservations') || 'Manage player reservations'}</Text>
             </View>
@@ -264,6 +256,15 @@ export default function AcademyBookingsScreen() {
               <Ionicons name="time" size={18} color={filter === 'pending' ? '#fff' : '#666'} />
               <Text style={[styles.filterButtonText, filter === 'pending' && styles.filterButtonTextActive]}>
                 {i18n.t('pending') || 'Pending'}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.filterButton, filter === 'new_time_proposed' && styles.filterButtonActive]}
+              onPress={() => setFilter('new_time_proposed')}
+            >
+              <Ionicons name="swap-horizontal" size={18} color={filter === 'new_time_proposed' ? '#fff' : '#666'} />
+              <Text style={[styles.filterButtonText, filter === 'new_time_proposed' && styles.filterButtonTextActive]}>
+                {i18n.t('newTimeProposed') || 'New Time'}
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -314,10 +315,16 @@ export default function AcademyBookingsScreen() {
                           </View>
                         </View>
                       </View>
-                      <View style={[styles.statusBadge, { backgroundColor: getStatusColor(booking.status) }]}>
-                        <Text style={styles.statusText}>{getStatusText(booking.status)}</Text>
+                      <View style={[styles.statusBadge, { backgroundColor: getStatusMeta(booking.status).color }]}>
+                        <Text style={styles.statusText}>{getStatusMeta(booking.status).label}</Text>
                       </View>
                     </View>
+
+                    {getStatusMeta(booking.status).note ? (
+                      <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, marginBottom: 12, lineHeight: 18 }}>
+                        {getStatusMeta(booking.status).note}
+                      </Text>
+                    ) : null}
 
                     <View style={styles.bookingDetails}>
                       {booking.type === 'academy' && booking.program && (
@@ -365,21 +372,35 @@ export default function AcademyBookingsScreen() {
                       <Text style={styles.priceValue}>{booking.price != null ? `${booking.price} EGP` : '—'}</Text>
                     </View>
                     
-                    {booking.status === 'timing_proposed' && booking.proposedByAdmin && booking.type === 'clinic' && (
+                    {(booking.status === 'new_time_proposed' || booking.status === 'timing_proposed') && booking.proposedByAdmin && booking.type === 'clinic' && (
                       <View style={{flexDirection: 'row', gap: 12, marginTop: 12}}>
                         <TouchableOpacity
-                          style={[styles.chatButton, {flex: 1, backgroundColor: '#10b981', marginTop: 0}]}
+                          style={[styles.chatButton, {flex: 1, backgroundColor: '#10b981', marginTop: 0, opacity: actionLoading?.id === booking.id ? 0.6 : 1 }]}
                           onPress={() => handleAcceptTiming(booking.id)}
+                          disabled={actionLoading?.id === booking.id}
                         >
-                          <Ionicons name="checkmark" size={18} color="#fff" />
-                          <Text style={[styles.chatButtonText, {color: '#fff', marginLeft: 8}]}>{i18n.t('accept') || 'Accept'}</Text>
+                          {actionLoading?.id === booking.id && actionLoading?.type === 'accept' ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <>
+                              <Ionicons name="checkmark" size={18} color="#fff" />
+                              <Text style={[styles.chatButtonText, {color: '#fff', marginLeft: 8}]}>{i18n.t('accept') || 'Accept'}</Text>
+                            </>
+                          )}
                         </TouchableOpacity>
                         <TouchableOpacity
-                          style={[styles.chatButton, {flex: 1, backgroundColor: '#ef4444', marginTop: 0}]}
+                          style={[styles.chatButton, {flex: 1, backgroundColor: '#ef4444', marginTop: 0, opacity: actionLoading?.id === booking.id ? 0.6 : 1 }]}
                           onPress={() => handleRejectTiming(booking.id)}
+                          disabled={actionLoading?.id === booking.id}
                         >
-                          <Ionicons name="close" size={18} color="#fff" />
-                          <Text style={[styles.chatButtonText, {color: '#fff', marginLeft: 8}]}>{i18n.t('reject') || 'Reject'}</Text>
+                          {actionLoading?.id === booking.id && actionLoading?.type === 'reject' ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <>
+                              <Ionicons name="close" size={18} color="#fff" />
+                              <Text style={[styles.chatButtonText, {color: '#fff', marginLeft: 8}]}>{i18n.t('reject') || 'Reject'}</Text>
+                            </>
+                          )}
                         </TouchableOpacity>
                       </View>
                     )}
@@ -440,6 +461,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 16,
+    zIndex: 10,
+    elevation: 10,
   },
   headerContent: {
     flex: 1,

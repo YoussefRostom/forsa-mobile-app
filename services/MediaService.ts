@@ -75,6 +75,12 @@ export interface MediaDoc {
   error: string | null;
 }
 
+export interface TaggedUserMeta {
+  id: string;
+  name: string;
+  role?: string;
+}
+
 /**
  * Upload media file directly to Cloudinary using unsigned upload preset
  * @param localUri - Local file URI from expo-image-picker
@@ -83,7 +89,8 @@ export interface MediaDoc {
  */
 export async function uploadMedia(
   localUri: string,
-  type: ResourceType
+  type: ResourceType,
+  onProgress?: (progress: number) => void
 ): Promise<CloudinaryResponse> {
   // Get environment variables with multiple fallbacks
   const cloudName = getEnvVar('EXPO_PUBLIC_CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_CLOUD_NAME');
@@ -149,13 +156,15 @@ export async function uploadMedia(
   // Get file name from URI
   const filename = localUri.split('/').pop() || `media.${type === 'video' ? 'mp4' : 'jpg'}`;
   const match = /\.(\w+)$/.exec(filename);
-  const type_extension = match ? `image/${match[1] === 'jpg' ? 'jpeg' : match[1]}` : 
-    (type === 'video' ? 'video/mp4' : 'image/jpeg');
+  const extension = match?.[1]?.toLowerCase();
+  const mimeType = extension
+    ? `${type}/${extension === 'jpg' ? 'jpeg' : extension}`
+    : (type === 'video' ? 'video/mp4' : 'image/jpeg');
 
   // Append file - React Native FormData expects { uri, type, name }
   formData.append('file', {
     uri: localUri,
-    type: type_extension,
+    type: mimeType,
     name: filename,
   } as any);
 
@@ -163,36 +172,78 @@ export async function uploadMedia(
   formData.append('folder', folder);
 
   try {
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      body: formData,
-      // Don't set Content-Type header - React Native FormData sets it automatically with boundary
+    const timeoutMs = type === 'video' ? 600000 : 90000;
+
+    const data = await new Promise<CloudinaryResponse>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      const timeoutId = setTimeout(() => {
+        try {
+          xhr.abort();
+        } catch {
+          // no-op
+        }
+      }, timeoutMs);
+
+      xhr.open('POST', endpoint);
+      xhr.responseType = 'text';
+
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable && onProgress) {
+          const progress = Math.min(100, Math.max(0, Math.round((event.loaded / event.total) * 100)));
+          onProgress(progress);
+        }
+      };
+
+      xhr.onload = () => {
+        clearTimeout(timeoutId);
+
+        try {
+          const responseText = typeof xhr.response === 'string' ? xhr.response : xhr.responseText;
+          const parsed: CloudinaryResponse = JSON.parse(responseText || '{}');
+
+          if (xhr.status < 200 || xhr.status >= 300) {
+            let errorMessage = `Cloudinary upload failed: ${xhr.status} - ${responseText}`;
+
+            if (xhr.status === 401) {
+              errorMessage += '\n\nThis usually means:\n' +
+                '1. Your upload preset name is incorrect, OR\n' +
+                '2. Your upload preset is not set to "Unsigned" mode, OR\n' +
+                '3. Your cloud name is incorrect\n\n' +
+                'Please verify your Cloudinary credentials in the .env file and ensure:\n' +
+                '- The upload preset exists and is set to "Unsigned"\n' +
+                '- The cloud name matches your Cloudinary account\n' +
+                '- You have restarted the Expo server after updating .env';
+            }
+
+            reject(new Error(errorMessage));
+            return;
+          }
+
+          if ((parsed as any)?.error) {
+            reject(new Error(`Cloudinary error: ${(parsed as any).error.message || 'Unknown error'}`));
+            return;
+          }
+
+          onProgress?.(100);
+          resolve(parsed);
+        } catch (parseError: any) {
+          reject(new Error(parseError?.message || 'Failed to parse upload response'));
+        }
+      };
+
+      xhr.onerror = () => {
+        clearTimeout(timeoutId);
+        reject(new Error('Failed to upload media to Cloudinary. Please check your connection and try again.'));
+      };
+
+      xhr.onabort = () => {
+        clearTimeout(timeoutId);
+        reject(new Error('Upload timed out. Please try a smaller file or a stronger connection.'));
+      };
+
+      onProgress?.(1);
+      xhr.send(formData);
     });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      let errorMessage = `Cloudinary upload failed: ${response.status} - ${errorText}`;
-      
-      // Provide helpful error messages for common issues
-      if (response.status === 401) {
-        errorMessage += '\n\nThis usually means:\n' +
-          '1. Your upload preset name is incorrect, OR\n' +
-          '2. Your upload preset is not set to "Unsigned" mode, OR\n' +
-          '3. Your cloud name is incorrect\n\n' +
-          'Please verify your Cloudinary credentials in the .env file and ensure:\n' +
-          '- The upload preset exists and is set to "Unsigned"\n' +
-          '- The cloud name matches your Cloudinary account\n' +
-          '- You have restarted the Expo server after updating .env';
-      }
-      
-      throw new Error(errorMessage);
-    }
-
-    const data: CloudinaryResponse = await response.json();
-    
-    if (data.error) {
-      throw new Error(`Cloudinary error: ${data.error.message || 'Unknown error'}`);
-    }
 
     return data;
   } catch (error: any) {
@@ -277,7 +328,8 @@ async function getAuthorName(ownerId: string, ownerRole: Role): Promise<string> 
  */
 export async function createFeedItemIfNeeded(
   mediaDoc: MediaDoc,
-  content: string = ''
+  content: string = '',
+  taggedUsers: TaggedUserMeta[] = []
 ): Promise<string | null> {
   // Since feed reads from /posts, we'll create a post entry
   // that references the media
@@ -293,6 +345,15 @@ export async function createFeedItemIfNeeded(
     const ownerRole = await getCurrentUserRole();
     const visibleToRoles = getVisibleToRoles(ownerRole);
 
+    const sanitizedTaggedUsers = taggedUsers
+      .map((entry) => ({
+        id: String(entry?.id || '').trim(),
+        name: String(entry?.name || '').trim(),
+        role: entry?.role ? String(entry.role).trim() : undefined,
+      }))
+      .filter((entry) => entry.id && entry.name)
+      .slice(0, 5);
+
     const postData = {
       mediaId: mediaDoc.id,
       mediaUrl: mediaDoc.secureUrl,
@@ -305,6 +366,10 @@ export async function createFeedItemIfNeeded(
       visibility: mediaDoc.visibility || 'public',
       author: await getAuthorName(mediaDoc.ownerId, ownerRole), // Fetch user name based on role
       content: content || '', // Caption/text content for the post
+      contentText: content || '',
+      taggedUsers: sanitizedTaggedUsers,
+      taggedUserIds: sanitizedTaggedUsers.map((entry) => entry.id),
+      taggedUserNames: sanitizedTaggedUsers.map((entry) => entry.name),
       timestamp: serverTimestamp(),
       createdAt: serverTimestamp(),
     };
@@ -370,14 +435,18 @@ export async function uploadAndSaveMedia(
   localUri: string,
   type: ResourceType,
   visibility: Visibility = 'public',
-  content: string = ''
+  content: string = '',
+  onProgress?: (progress: number) => void,
+  taggedUsers: TaggedUserMeta[] = []
 ): Promise<{ mediaId: string; postId: string | null }> {
   try {
+    const normalizedContent = String(content || '').trim().slice(0, 500);
+
     // Step 0: Validate file size before upload
     await validateFileSizeBeforeUpload(localUri, type);
     
     // Step 1: Upload to Cloudinary
-    const cloudinaryResponse = await uploadMedia(localUri, type);
+    const cloudinaryResponse = await uploadMedia(localUri, type, onProgress);
 
     // Step 2: Save to Firestore
     const mediaId = await saveMediaToFirestore(cloudinaryResponse, type, visibility);
@@ -404,8 +473,8 @@ export async function uploadAndSaveMedia(
       error: null,
     };
 
-    // Step 4: Create feed item if needed (pass content/caption)
-    const postId = await createFeedItemIfNeeded(mediaDoc, content);
+    // Step 4: Create feed item if needed (pass content/caption + tagged users)
+    const postId = await createFeedItemIfNeeded(mediaDoc, normalizedContent, taggedUsers);
 
     return { mediaId, postId };
   } catch (error: any) {
@@ -630,10 +699,22 @@ export async function updateMediaCaption(
       targetPostId = postDoc.id;
     }
 
-    // Update the post's content field
+    // Verify ownership and update the post caption fields consistently
     const postRef = doc(db, 'posts', targetPostId);
+    const postSnap = await getDoc(postRef);
+
+    if (!postSnap.exists()) {
+      throw new Error('Associated post not found');
+    }
+
+    const postData = postSnap.data();
+    if (postData.ownerId !== user.uid) {
+      throw new Error('You can only update your own caption');
+    }
+
     await updateDoc(postRef, {
       content: newContent,
+      contentText: newContent,
       updatedAt: serverTimestamp(),
     });
   } catch (error: any) {
@@ -691,14 +772,20 @@ export async function deleteAdminMedia(
     // Delete associated post if it exists
     if (targetPostId) {
       const postRef = doc(db, 'posts', targetPostId);
-      await deleteDoc(postRef);
+      const postSnap = await getDoc(postRef);
+
+      if (postSnap.exists()) {
+        const postData = postSnap.data();
+        if (postData.ownerId !== user.uid) {
+          throw new Error('You can only delete your own post');
+        }
+
+        await deleteDoc(postRef);
+      }
     }
 
-    // Delete media document
-    await deleteDoc(mediaRef);
-
-    // Note: Cloudinary cleanup would ideally be done here, but it requires backend API
-    // For now, we only delete from Firestore. Cloudinary cleanup can be done via backend cron job.
+    // Delete media and attempt backend/cloud cleanup when available
+    await cleanupMediaForPost(mediaId);
   } catch (error: any) {
     console.error('Error deleting admin media:', error);
     throw new Error(`Failed to delete media: ${error.message}`);

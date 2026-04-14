@@ -7,18 +7,19 @@ type Agent = {
   profilePic?: string;
   phone?: string;
 };
+type AgentRecord = AgentDirectoryEntry;
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Animated, FlatList, Image, Modal, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { collection, getDocs } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { type QueryDocumentSnapshot, type DocumentData } from 'firebase/firestore';
 import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import i18n from '../locales/i18n';
 import * as CommonStyles from '../styles/CommonStyles';
+import { fetchAgentsPage, type AgentDirectoryEntry } from '../services/AgentDataService';
 
 // Backend fetch for agents
 // const AGENT_API_URL = 'http://192.168.1.31:4000/api/agents';
@@ -59,40 +60,20 @@ export default function AgentSearchScreen() {
   const [city, setCity] = useState('');
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
-  const [results, setResults] = useState<Agent[]>([]);
-  const [allAgents, setAllAgents] = useState<Agent[]>([]);
+  const [results, setResults] = useState<AgentRecord[]>([]);
+  const [allAgents, setAllAgents] = useState<AgentRecord[]>([]);
   const [favorites, setFavorites] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [cursor, setCursor] = useState<QueryDocumentSnapshot<DocumentData> | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const favoriteAnims = useRef(new Map<string, Animated.Value>()).current;
-  const [modalAgent, setModalAgent] = useState<Agent | null>(null);
+  const [modalAgent, setModalAgent] = useState<AgentRecord | null>(null);
   const [remainingTexts, setRemainingTexts] = useState(2);
 
   useEffect(() => {
-    const fetchAgents = async () => {
-      setLoading(true);
-      try {
-        const agentsRef = collection(db, 'agents');
-        const querySnapshot = await getDocs(agentsRef);
-        const agents = querySnapshot.docs.map(doc => ({
-          id: doc.id,
-          name: `${doc.data().firstName || ''} ${doc.data().lastName || ''}`.trim(),
-          city: doc.data().city || '',
-          description: doc.data().description || '',
-          profilePic: doc.data().profilePhoto || '',
-          phone: doc.data().phone || '',
-          ...doc.data()
-        })) as Agent[];
-        setAllAgents(agents);
-        setResults(agents);
-      } catch (err) {
-        console.error('❌ Failed to fetch agents:', err);
-        setAllAgents([]);
-        setResults([]);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchAgents();
+    loadInitialAgents();
     // Load favorites from local storage
     (async () => {
       try {
@@ -110,6 +91,53 @@ export default function AgentSearchScreen() {
       } catch {}
     })();
   }, []);
+
+  const loadInitialAgents = async () => {
+    setLoading(true);
+    setErrorMessage(null);
+    try {
+      const page = await fetchAgentsPage({ pageSize: 20, cursor: null });
+      setAllAgents(page.items);
+      setResults(page.items);
+      setCursor(page.cursor);
+      setHasMore(page.hasMore);
+    } catch (err) {
+      console.error('Failed to fetch agents:', err);
+      setAllAgents([]);
+      setResults([]);
+      setHasMore(false);
+      setErrorMessage(i18n.t('failedToLoadAgents') || 'Failed to load agents. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadMoreAgents = async () => {
+    if (loading || loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    setErrorMessage(null);
+    try {
+      const page = await fetchAgentsPage({ pageSize: 20, cursor });
+      const merged = [...allAgents, ...page.items];
+      setAllAgents(merged);
+      setCursor(page.cursor);
+      setHasMore(page.hasMore);
+
+      let filtered = merged.filter(a =>
+        (!search || a.name.toLowerCase().includes(search.toLowerCase())) &&
+        (!city || a.city === city)
+      );
+      if (showFavoritesOnly) {
+        filtered = filtered.filter(a => favorites.includes(a.id));
+      }
+      setResults(filtered);
+    } catch (err) {
+      console.error('Failed to load more agents:', err);
+      setErrorMessage(i18n.t('failedToLoadMoreAgents') || 'Failed to load more agents.');
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   const handleSearch = () => {
     let filtered = allAgents.filter(a =>
@@ -257,83 +285,42 @@ export default function AgentSearchScreen() {
           <TouchableOpacity
             style={styles.card}
             onPress={() => setModalAgent(item)}
+            activeOpacity={0.85}
           >
-      {/* Agent Modal */}
-      <Modal
-        visible={!!modalAgent}
-        animationType="slide"
-        transparent
-        onRequestClose={() => setModalAgent(null)}
-      >
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' }}>
-          {modalAgent && (
-            <View style={{ backgroundColor: '#000', borderRadius: 24, padding: 24, width: '85%', alignItems: 'center', shadowColor: '#fff', shadowOpacity: 0.2, shadowRadius: 16 }}>
-              {modalAgent.profilePic ? (
-                <Image source={{ uri: modalAgent.profilePic }} style={{ width: 80, height: 80, borderRadius: 40, marginBottom: 12, backgroundColor: '#eee', borderWidth: 1, borderColor: '#fff' }} />
-              ) : (
-                <Ionicons name="person-circle-outline" size={80} color="#fff" style={{ marginBottom: 12 }} />
-              )}
-              <Text style={{ fontSize: 22, fontWeight: 'bold', color: '#fff', marginBottom: 4 }}>{modalAgent.name}</Text>
-              <Text style={{ fontSize: 16, color: '#fff', marginBottom: 8 }}>{cityLabels[modalAgent.city] || modalAgent.city}</Text>
-              <Text style={{ fontSize: 16, color: '#fff', marginBottom: 16 }}>{modalAgent.description}</Text>
-              <Text style={{ color: '#fff', fontSize: 15, marginBottom: 10 }}>
-                {i18n.t('remainingTexts', { count: remainingTexts }) || `You have ${remainingTexts} texts left this month.`}
-              </Text>
-              <TouchableOpacity
-                style={{ backgroundColor: '#fff', borderRadius: 24, paddingVertical: 12, paddingHorizontal: 32, marginBottom: 12 }}
-                onPress={async () => {
-                  // Only allow if remaining texts > 0
-                  if (remainingTexts > 0) {
-                    // Decrement and save for this month immediately
-                    const newCount = remainingTexts - 1;
-                    try {
-                      const now = new Date();
-                      const key = `remainingAgentTexts_${now.getFullYear()}_${now.getMonth()}`;
-                      await AsyncStorage.setItem(key, String(newCount));
-                    } catch {}
-                    setRemainingTexts(newCount);
-                    setModalAgent(null);
-                    router.push({ pathname: '/player-chat', params: { agentId: modalAgent.id, maxFreeMessages: 3 } });
-                  } else {
-                    Alert.alert(
-                      i18n.t('paywallTitle') || 'Out of texts',
-                      i18n.t('paywallMsg') || 'You have used your free texts for this month. Please pay to contact more agents.'
-                    );
-                  }
-                }}
-              >
-                <Text style={{ color: '#000', fontWeight: 'bold', fontSize: 18 }}>{i18n.t('text') || 'Text'}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={{ backgroundColor: '#fff', borderRadius: 24, paddingVertical: 12, paddingHorizontal: 32 }}
-                onPress={() => setModalAgent(null)}
-              >
-                <Text style={{ color: '#000', fontWeight: 'bold', fontSize: 18 }}>{i18n.t('cancel') || 'Close'}</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-        </View>
-      </Modal>
             <TouchableOpacity
-              style={{ position: 'absolute', top: 8, right: 8, zIndex: 1, padding: 8 }}
+              style={styles.favBtn}
               onPress={(e) => { e.stopPropagation(); toggleFavorite(item.id); }}
+              hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
             >
-              <Animated.Text style={{ fontSize: 28, color: favorites.includes(item.id) ? '#ffd700' : '#aaa', transform: [{ scale: getFavoriteAnimation(item.id) }] }}>
+              <Animated.Text style={{ fontSize: 22, color: favorites.includes(item.id) ? '#ffd700' : 'rgba(255,255,255,0.35)', transform: [{ scale: getFavoriteAnimation(item.id) }] }}>
                 ★
               </Animated.Text>
             </TouchableOpacity>
             <View style={styles.cardHeader}>
               {item.profilePic ? (
-                <Image source={{ uri: item.profilePic }} style={{ width: 54, height: 54, borderRadius: 27, marginRight: 14, backgroundColor: '#eee', borderWidth: 1, borderColor: '#fff' }} />
+                <Image source={{ uri: item.profilePic }} style={styles.cardAvatar} />
               ) : (
-                <Ionicons name="person-circle-outline" size={54} color="#fff" style={{ marginRight: 14 }} />
+                <View style={styles.cardAvatarPlaceholder}>
+                  <Ionicons name="person" size={26} color="#666" />
+                </View>
               )}
-              <View>
+              <View style={{ flex: 1 }}>
                 <Text style={styles.cardTitle}>{item.name}</Text>
-                <Text style={styles.cardCity}>{cityLabels[item.city] || item.city}</Text>
+                {!!item.city && (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 3 }}>
+                    <Ionicons name="location" size={12} color="rgba(255,255,255,0.5)" />
+                    <Text style={styles.cardCity}>{cityLabels[item.city] || item.city}</Text>
+                  </View>
+                )}
               </View>
             </View>
-            <Text style={styles.cardDesc}>{item.description}</Text>
+            {!!item.description && (
+              <Text style={styles.cardDesc} numberOfLines={2}>{item.description}</Text>
+            )}
+            <View style={styles.cardFooter}>
+              <Ionicons name="chatbubble-ellipses-outline" size={14} color="rgba(255,255,255,0.45)" />
+              <Text style={styles.cardFooterText}>{i18n.t('tapToViewDetails') || 'Tap to view details'}</Text>
+            </View>
           </TouchableOpacity>
         )}
         ListEmptyComponent={
@@ -343,6 +330,14 @@ export default function AgentSearchScreen() {
               <AgentCardSkeleton />
               <AgentCardSkeleton />
             </View>
+          ) : errorMessage ? (
+            <View style={styles.emptyWrap}>
+              <Ionicons name="alert-circle-outline" size={48} color="#bbb" style={{ marginBottom: 8 }} />
+              <Text style={styles.empty}>{errorMessage}</Text>
+              <TouchableOpacity style={styles.retryButton} onPress={loadInitialAgents}>
+                <Text style={styles.retryButtonText}>{i18n.t('retry') || 'Retry'}</Text>
+              </TouchableOpacity>
+            </View>
           ) : (
             <View style={styles.emptyWrap}>
               <Ionicons name="alert-circle-outline" size={48} color="#bbb" style={{ marginBottom: 8 }} />
@@ -350,9 +345,89 @@ export default function AgentSearchScreen() {
             </View>
           )
         }
-        contentContainerStyle={{ flexGrow: 1, paddingBottom: 40, backgroundColor: '#000', paddingTop: 8, paddingHorizontal: 0 }}
+        ListFooterComponent={
+          loading || results.length === 0 ? null : (
+            <View style={styles.footerWrap}>
+              {loadingMore ? (
+                <Text style={styles.footerInfoText}>{i18n.t('loading') || 'Loading...'}</Text>
+              ) : hasMore ? (
+                <TouchableOpacity style={styles.loadMoreButton} onPress={loadMoreAgents}>
+                  <Text style={styles.loadMoreButtonText}>{i18n.t('loadMore') || 'Load more'}</Text>
+                </TouchableOpacity>
+              ) : (
+                <Text style={styles.footerInfoText}>{i18n.t('noMoreResults') || 'No more results'}</Text>
+              )}
+            </View>
+          )
+        }
+        contentContainerStyle={{ flexGrow: 1, paddingBottom: 40, backgroundColor: '#000', paddingTop: 8, paddingHorizontal: 16 }}
         style={{ marginTop: 0 }}
       />
+      {/* Agent detail modal — rendered once at root level, not inside renderItem */}
+      <Modal
+        visible={!!modalAgent}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setModalAgent(null)}
+      >
+        <View style={styles.modalOverlay}>
+          {modalAgent && (
+            <View style={styles.modalSheet}>
+              <View style={styles.modalHandle} />
+              {/* Photo */}
+              <View style={styles.modalPhotoWrap}>
+                {modalAgent.profilePic ? (
+                  <Image source={{ uri: modalAgent.profilePic }} style={styles.modalPhoto} />
+                ) : (
+                  <View style={styles.modalPhotoPlaceholder}>
+                    <Ionicons name="person" size={40} color="#999" />
+                  </View>
+                )}
+              </View>
+              <Text style={styles.modalName}>{modalAgent.name}</Text>
+              {!!modalAgent.city && (
+                <View style={styles.modalLocationRow}>
+                  <Ionicons name="location" size={13} color="#888" />
+                  <Text style={styles.modalCity}>{cityLabels[modalAgent.city] || modalAgent.city}</Text>
+                </View>
+              )}
+              {!!modalAgent.description && (
+                <Text style={styles.modalDesc}>{modalAgent.description}</Text>
+              )}
+              <Text style={styles.modalTextsLeft}>
+                {i18n.t('remainingTexts', { count: remainingTexts }) || `${remainingTexts} contacts remaining this month`}
+              </Text>
+              <TouchableOpacity
+                style={styles.modalPrimaryBtn}
+                activeOpacity={0.85}
+                onPress={async () => {
+                  if (remainingTexts > 0) {
+                    const newCount = remainingTexts - 1;
+                    try {
+                      const now = new Date();
+                      await AsyncStorage.setItem(`remainingAgentTexts_${now.getFullYear()}_${now.getMonth()}`, String(newCount));
+                    } catch {}
+                    setRemainingTexts(newCount);
+                    setModalAgent(null);
+                    router.push({ pathname: '/agent-details', params: { id: modalAgent.id } });
+                  } else {
+                    Alert.alert(
+                      i18n.t('paywallTitle') || 'Out of contacts',
+                      i18n.t('paywallMsg') || 'You have used your free contacts for this month.'
+                    );
+                  }
+                }}
+              >
+                <Ionicons name="person" size={18} color="#000" style={{ marginRight: 8 }} />
+                <Text style={styles.modalPrimaryBtnText}>{i18n.t('viewProfile') || 'View Profile'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.modalCloseBtn} activeOpacity={0.8} onPress={() => setModalAgent(null)}>
+                <Text style={styles.modalCloseBtnText}>{i18n.t('cancel') || 'Close'}</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      </Modal>
       {/* Fixed Forsa Logo */}
       <Image source={require('../assets/forsa-logo.png')} style={styles.forsaLogo} />
     </View>
@@ -588,22 +663,158 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   card: {
-    backgroundColor: '#000', // Changed from white to black
+    backgroundColor: '#111',
     borderRadius: 18,
     padding: 18,
-    marginBottom: 16,
-    shadowColor: '#fff', // Changed shadow to white for contrast
-    shadowOpacity: 0.10,
-    shadowRadius: 12,
-    elevation: 4,
-    alignItems: 'flex-start',
+    marginBottom: 14,
+    shadowColor: '#fff',
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 3,
     borderWidth: 1,
-    borderColor: '#fff', // Changed border to white
+    borderColor: 'rgba(255,255,255,0.1)',
+    position: 'relative',
   },
-  cardTitle: { fontWeight: 'bold', fontSize: 18, color: '#fff', marginBottom: 2 },
-  cardCity: { color: '#fff', fontSize: 14, marginBottom: 2 },
-  cardDesc: { color: '#fff', fontSize: 15, marginTop: 4 },
+  favBtn: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    zIndex: 2,
+    padding: 6,
+  },
+  cardAvatar: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    marginRight: 14,
+    backgroundColor: '#333',
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.15)',
+  },
+  cardAvatarPlaceholder: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    marginRight: 14,
+    backgroundColor: '#222',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  cardTitle: { fontWeight: '700', fontSize: 17, color: '#fff', marginBottom: 0 },
+  cardCity: { color: 'rgba(255,255,255,0.55)', fontSize: 13, marginLeft: 4 },
+  cardDesc: { color: 'rgba(255,255,255,0.65)', fontSize: 14, marginTop: 10, lineHeight: 19 },
+  cardFooter: { flexDirection: 'row', alignItems: 'center', marginTop: 12, gap: 5 },
+  cardFooterText: { color: 'rgba(255,255,255,0.3)', fontSize: 12 },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    justifyContent: 'flex-end',
+  },
+  modalSheet: {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    padding: 28,
+    paddingBottom: 40,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -6 },
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    elevation: 14,
+  },
+  modalHandle: {
+    width: 42,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#e0e0e0',
+    marginBottom: 20,
+  },
+  modalPhotoWrap: {
+    marginBottom: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+  },
+  modalPhoto: {
+    width: 90,
+    height: 90,
+    borderRadius: 45,
+    backgroundColor: '#f0f0f0',
+    borderWidth: 3,
+    borderColor: '#000',
+  },
+  modalPhotoPlaceholder: {
+    width: 90,
+    height: 90,
+    borderRadius: 45,
+    backgroundColor: '#f0f0f0',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 3,
+    borderColor: '#e0e0e0',
+  },
+  modalName: { fontSize: 22, fontWeight: '800', color: '#000', textAlign: 'center', marginBottom: 4 },
+  modalLocationRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
+  modalCity: { fontSize: 14, color: '#888', marginLeft: 3 },
+  modalDesc: { fontSize: 14, color: '#555', textAlign: 'center', lineHeight: 20, marginBottom: 14, paddingHorizontal: 8 },
+  modalTextsLeft: { fontSize: 13, color: '#999', marginBottom: 18, textAlign: 'center' },
+  modalPrimaryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#000',
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 32,
+    width: '100%',
+    marginBottom: 10,
+  },
+  modalPrimaryBtnText: { color: '#fff', fontWeight: '700', fontSize: 16 },
+  modalCloseBtn: {
+    width: '100%',
+    borderRadius: 14,
+    paddingVertical: 12,
+    alignItems: 'center',
+    backgroundColor: '#f5f5f5',
+  },
+  modalCloseBtnText: { color: '#555', fontWeight: '600', fontSize: 15 },
   empty: { color: '#888', textAlign: 'center', marginTop: 40 },
+  retryButton: {
+    marginTop: 14,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  retryButtonText: {
+    color: '#000',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  footerWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+  },
+  loadMoreButton: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+  },
+  loadMoreButtonText: {
+    color: '#000',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  footerInfoText: {
+    color: '#bbb',
+    fontSize: 12,
+  },
   forsaLogo: {
     position: 'absolute',
     bottom: 18,

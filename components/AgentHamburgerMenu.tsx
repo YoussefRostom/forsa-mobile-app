@@ -22,6 +22,7 @@ const AgentHamburgerMenu: React.FC<AgentHamburgerMenuProps> = ({ visible, onClos
     { label: i18n.t('agentPlayers') || 'Players', route: '/agent-players' },
     { label: i18n.t('messages') || 'Messages', route: '/agent-contacts' },
     { label: i18n.t('uploadMedia') || 'Upload Media', route: '/agent-upload-media' },
+      { label: i18n.t('myMedia') || 'My Media', route: '/agent-my-media' },
     { label: i18n.t('signOut') || 'Sign Out', route: '/signout' },
   ];
 

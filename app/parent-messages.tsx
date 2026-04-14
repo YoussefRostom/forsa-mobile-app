@@ -9,6 +9,7 @@ import i18n from '../locales/i18n';
 import { subscribeToConversations, Conversation } from '../services/MessagingService';
 import { findAdminUserId, getOrCreateConversation } from '../services/MessagingService';
 import { getChattableUsers, startConversationWithUser } from '../services/BookingMessagingService';
+import { auth } from '../lib/firebase';
 
 export default function ParentMessagesScreen() {
   const { openMenu } = useHamburgerMenu();
@@ -58,7 +59,7 @@ export default function ParentMessagesScreen() {
     try {
       const conversationId = await startConversationWithUser(userId);
       router.push({
-        pathname: '/academy-chat', // Reuse academy-chat for now
+        pathname: '/parent-chat',
         params: {
           conversationId,
           otherUserId: userId,
@@ -74,7 +75,7 @@ export default function ParentMessagesScreen() {
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <LinearGradient
-        colors={['#000000', '#1a1a1a', '#2d2d2d']}
+        colors={['#000000', '#000000', '#111111']}
         style={styles.gradient}
       >
         <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
@@ -84,17 +85,17 @@ export default function ParentMessagesScreen() {
               <TouchableOpacity style={styles.menuButton} onPress={openMenu}>
                 <Ionicons name="menu" size={24} color="#fff" />
               </TouchableOpacity>
-              <TouchableOpacity onPress={async () => {
+              <TouchableOpacity style={styles.textAdminTouchable} onPress={async () => {
                 try {
                   const adminId = await findAdminUserId();
-                  if (!adminId) { Alert.alert('No admin found'); return; }
+                  if (!adminId) { Alert.alert(i18n.t('noAdminFound') || 'No admin found'); return; }
                   const convId = await getOrCreateConversation(adminId);
-                  router.push({ pathname: '/academy-chat', params: { conversationId: convId, otherUserId: adminId, contact: 'Admin' } });
+                  router.push({ pathname: '/parent-chat', params: { conversationId: convId, otherUserId: adminId, contact: 'Admin' } });
                 } catch (err) { console.error(err); }
               }}>
                 <View style={styles.textAdminBtn}>
                   <Ionicons name="chatbubble-ellipses-outline" size={16} color="#fff" style={{marginRight: 6}} />
-                  <Text style={styles.textAdminText}>Text Admin</Text>
+                  <Text style={styles.textAdminText} numberOfLines={1} ellipsizeMode="tail">{i18n.t('textAdmin') || 'Text Admin'}</Text>
                 </View>
               </TouchableOpacity>
             </View>
@@ -119,8 +120,10 @@ export default function ParentMessagesScreen() {
               showsVerticalScrollIndicator={false}
               renderItem={({ item }) => {
                 const displayName = item.otherParticipantName || 'Unknown';
-                const lastMsg = item.lastMessage || '';
                 const unreadCount = item.unreadCount || 0;
+                const lastMsg = item.lastMessage
+                  ? `${item.lastMessageSenderId === auth.currentUser?.uid ? `${i18n.t('you') || 'You'}: ` : ''}${item.lastMessage}`
+                  : '';
                 const lastMsgTime = item.lastMessageAt?.toDate?.() 
                   ? new Date(item.lastMessageAt.toDate()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                   : '';
@@ -130,7 +133,7 @@ export default function ParentMessagesScreen() {
                   <TouchableOpacity 
                     style={styles.conversationCard}
                     onPress={() => router.push({
-                      pathname: '/academy-chat', // Reuse academy-chat for now, can create parent-chat later
+                      pathname: '/parent-chat',
                       params: {
                         conversationId: item.id,
                         otherUserId: item.otherParticipantId || '',
@@ -152,19 +155,24 @@ export default function ParentMessagesScreen() {
                     </View>
                     <View style={styles.conversationContent}>
                       <View style={styles.conversationHeader}>
-                        <Text style={styles.conversationName}>{displayName}</Text>
-                        {unreadCount > 0 && (
-                          <View style={styles.unreadBadge}>
-                            <Text style={styles.unreadText}>{unreadCount}</Text>
-                          </View>
-                        )}
+                        <View style={styles.nameBlock}>
+                          <Text style={styles.conversationName} numberOfLines={1} ellipsizeMode="tail">{displayName}</Text>
+                          {!!item.otherParticipantRole && (
+                            <Text style={styles.conversationRole} numberOfLines={1} ellipsizeMode="tail">{String(item.otherParticipantRole).replace(/_/g, ' ')}</Text>
+                          )}
+                        </View>
+                        <View style={styles.metaColumn}>
+                          {!!lastMsgTime && <Text style={styles.lastMessageTime}>{lastMsgTime}</Text>}
+                          {unreadCount > 0 && (
+                            <View style={styles.unreadBadge}>
+                              <Text style={styles.unreadText}>{unreadCount}</Text>
+                            </View>
+                          )}
+                        </View>
                       </View>
-                      <Text style={styles.lastMessage} numberOfLines={1}>
+                      <Text style={[styles.lastMessage, unreadCount > 0 && styles.lastMessageUnread]} numberOfLines={1}>
                         {lastMsg || 'No messages yet'}
                       </Text>
-                      {lastMsgTime && (
-                        <Text style={styles.lastMessageTime}>{lastMsgTime}</Text>
-                      )}
                     </View>
                     <Ionicons name="chevron-forward" size={20} color="#999" />
                   </TouchableOpacity>
@@ -180,7 +188,7 @@ export default function ParentMessagesScreen() {
                     <ActivityIndicator size="small" color="#fff" style={{ marginTop: 20 }} />
                   ) : chattableUsers.length > 0 ? (
                     <View style={styles.chattableUsersContainer}>
-                      <Text style={styles.chattableUsersTitle}>Start a conversation:</Text>
+                      <Text style={styles.chattableUsersTitle}>{i18n.t('startConversationLabel') || 'Start a conversation:'}</Text>
                       {chattableUsers.map((user) => (
                         <TouchableOpacity
                           key={user.userId}
@@ -195,7 +203,7 @@ export default function ParentMessagesScreen() {
                               <Ionicons name="person-circle" size={32} color="#fff" />
                             )}
                           </View>
-                          <Text style={styles.chattableUserName}>{user.name}</Text>
+                          <Text style={styles.chattableUserName} numberOfLines={1} ellipsizeMode="tail">{user.name}</Text>
                           <Ionicons name="chatbubble-ellipses" size={20} color="#fff" />
                         </TouchableOpacity>
                       ))}
@@ -206,7 +214,7 @@ export default function ParentMessagesScreen() {
                       onPress={() => router.push('/parent-bookings')}
                       activeOpacity={0.8}
                     >
-                      <Text style={styles.viewBookingsButtonText}>View My Bookings</Text>
+                      <Text style={styles.viewBookingsButtonText}>{i18n.t('viewMyBookings') || 'View My Bookings'}</Text>
                     </TouchableOpacity>
                   )}
                 </View>
@@ -237,6 +245,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 20,
     width: '100%',
+    gap: 10,
   },
   menuButton: {
     width: 44,
@@ -258,11 +267,18 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.3)',
+    maxWidth: '100%',
+  },
+  textAdminTouchable: {
+    flexShrink: 1,
+    maxWidth: '68%',
+    marginLeft: 8,
   },
   textAdminText: {
     color: '#fff',
     fontWeight: 'bold',
     fontSize: 14,
+    flexShrink: 1,
   },
   headerTitle: {
     fontSize: 28,
@@ -278,30 +294,36 @@ const styles = StyleSheet.create({
   },
   messagesContent: {
     paddingHorizontal: 20,
-    paddingBottom: 40,
+    paddingBottom: 36,
+    flexGrow: 1,
   },
   messageCard: { display: 'none' },
   conversationCard: {
     backgroundColor: '#fff',
-    borderRadius: 24,
-    padding: 20,
-    marginBottom: 16,
+    borderRadius: 20,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    marginBottom: 12,
     flexDirection: 'row',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.3,
-    shadowRadius: 20,
-    elevation: 10,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 3,
   },
   avatarContainer: {
-    marginRight: 16,
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#f0f0f0',
+    marginRight: 14,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#f3f4f6',
     justifyContent: 'center',
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
   },
   avatarImage: {
     width: 48,
@@ -315,26 +337,46 @@ const styles = StyleSheet.create({
   },
   conversationContent: {
     flex: 1,
+    minWidth: 0,
   },
   conversationHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: 4,
+    gap: 10,
+  },
+  nameBlock: {
+    flex: 1,
+    minWidth: 0,
+    marginRight: 8,
   },
   conversationName: {
     fontWeight: 'bold',
     fontSize: 16,
     color: '#000',
+    flexShrink: 1,
+  },
+  conversationRole: {
+    marginTop: 2,
+    color: '#6b7280',
+    fontSize: 12,
+    textTransform: 'capitalize',
+  },
+  metaColumn: {
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    minWidth: 42,
+    flexShrink: 0,
   },
   unreadBadge: {
-    backgroundColor: '#000',
-    borderRadius: 12,
-    minWidth: 24,
-    height: 24,
+    backgroundColor: '#000000',
+    borderRadius: 999,
+    minWidth: 22,
+    height: 22,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 8,
+    paddingHorizontal: 7,
   },
   unreadText: {
     color: '#fff',
@@ -342,9 +384,13 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   lastMessage: {
-    color: '#666',
-    fontSize: 14,
-    marginTop: 4,
+    color: '#6b7280',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  lastMessageUnread: {
+    color: '#374151',
+    fontWeight: '600',
   },
   emptyState: {
     alignItems: 'center',
@@ -398,6 +444,7 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '500',
+    marginRight: 10,
   },
   viewBookingsButton: {
     backgroundColor: '#fff',
@@ -413,3 +460,4 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 });
+

@@ -7,6 +7,7 @@ import i18n from '../locales/i18n';
 import { auth, db } from '../lib/firebase';
 import { doc, getDoc, collection, addDoc } from 'firebase/firestore';
 import { notifyProviderAndAdmins, createNotification } from '../services/NotificationService';
+import { upsertBookingTransaction } from '../services/MonetizationService';
 
 export default function PlayerPrivateTrainingDetailsScreen() {
   const params = useLocalSearchParams();
@@ -68,9 +69,9 @@ export default function PlayerPrivateTrainingDetailsScreen() {
         <LinearGradient colors={['#000000', '#1a1a1a', '#2d2d2d']} style={styles.gradient}>
           <View style={styles.errorContent}>
             <Ionicons name="alert-circle-outline" size={64} color="#fff" />
-            <Text style={styles.errorText}>Private Training not found.</Text>
+            <Text style={styles.errorText}>{i18n.t('privateTrainingNotFound') || 'Private Training not found.'}</Text>
             <TouchableOpacity style={styles.backButtonLarge} onPress={() => router.back()}>
-              <Text style={styles.backButtonText}>Go Back</Text>
+              <Text style={styles.backButtonText}>{i18n.t('goBack') || 'Go Back'}</Text>
             </TouchableOpacity>
           </View>
         </LinearGradient>
@@ -81,7 +82,7 @@ export default function PlayerPrivateTrainingDetailsScreen() {
   const handleBookPrivateTraining = async () => {
     const user = auth.currentUser;
     if (!user) {
-      Alert.alert(i18n.t('error'), 'You must be logged in to book');
+      Alert.alert(i18n.t('error'), i18n.t('loginRequired') || 'You must be logged in to book');
       return;
     }
 
@@ -122,6 +123,7 @@ export default function PlayerPrivateTrainingDetailsScreen() {
       };
 
       const bookingRef = await addDoc(collection(db, 'bookings'), bookingData);
+      await upsertBookingTransaction(bookingRef.id, bookingData, user.uid, 'Player private training booking created');
       const providerId = academy.id;
 
       try {
@@ -145,13 +147,13 @@ export default function PlayerPrivateTrainingDetailsScreen() {
       }
 
       Alert.alert(
-        'Booking Request Sent',
-        'Your private training booking request has been sent. You will be notified once the academy responds.',
-        [{ text: 'OK', onPress: () => router.back() }]
+        i18n.t('bookingRequestSent') || 'Booking Request Sent',
+        i18n.t('privateTrainingBookingDesc') || 'Your private training booking request has been sent. You will be notified once the academy responds.',
+        [{ text: i18n.t('done') || 'OK', onPress: () => router.back() }]
       );
     } catch (error) {
       console.error('Private training booking error:', error);
-      Alert.alert(i18n.t('error'), 'Failed to send booking request. Please try again.');
+      Alert.alert(i18n.t('error'), i18n.t('bookingFailed') || 'Failed to send booking request. Please try again.');
     } finally {
       setBookingLoading(false);
     }
@@ -170,8 +172,12 @@ export default function PlayerPrivateTrainingDetailsScreen() {
               <Ionicons name="arrow-back" size={24} color="#fff" />
             </TouchableOpacity>
             <View style={styles.headerContent}>
-              <Text style={styles.headerTitle}>{program.name}</Text>
-              <Text style={styles.headerSubtitle}>Private Training Details</Text>
+              <Text style={styles.headerTitle}>
+                {program.type === 'private_training' && (!program.name || program.name === 'Private Training')
+                  ? (i18n.t('privateTraining') || 'Private Training')
+                  : program.name}
+              </Text>
+              <Text style={styles.headerSubtitle}>{i18n.t('privateTrainingDetails') || 'Private Training Details'}</Text>
             </View>
           </View>
 
@@ -186,7 +192,7 @@ export default function PlayerPrivateTrainingDetailsScreen() {
                   <Ionicons name="school" size={20} color="#000" />
                 </View>
                 <View style={styles.detailContent}>
-                  <Text style={styles.detailLabel}>Academy</Text>
+                  <Text style={styles.detailLabel}>{i18n.t('academyLabel') || 'Academy'}</Text>
                   <Text style={styles.detailValue}>{academy.academyName || academy.name}</Text>
                 </View>
               </View>
@@ -196,7 +202,7 @@ export default function PlayerPrivateTrainingDetailsScreen() {
                   <Ionicons name="person" size={20} color="#000" />
                 </View>
                 <View style={styles.detailContent}>
-                  <Text style={styles.detailLabel}>Coach Name</Text>
+                  <Text style={styles.detailLabel}>{i18n.t('coachName') || 'Coach Name'}</Text>
                   <Text style={styles.detailValue}>{program.coachName}</Text>
                 </View>
               </View>
@@ -207,7 +213,7 @@ export default function PlayerPrivateTrainingDetailsScreen() {
                     <Ionicons name="document-text" size={20} color="#000" />
                   </View>
                   <View style={styles.detailContent}>
-                    <Text style={styles.detailLabel}>Coach Bio</Text>
+                    <Text style={styles.detailLabel}>{i18n.t('coachBio') || 'Coach Bio'}</Text>
                     <Text style={styles.detailValue}>{program.coachBio}</Text>
                   </View>
                 </View>
@@ -219,7 +225,7 @@ export default function PlayerPrivateTrainingDetailsScreen() {
                     <Ionicons name="star" size={20} color="#000" />
                   </View>
                   <View style={styles.detailContent}>
-                    <Text style={styles.detailLabel}>Specializations</Text>
+                    <Text style={styles.detailLabel}>{i18n.t('specializations') || 'Specializations'}</Text>
                     <Text style={styles.detailValue}>{program.specializations.join(', ')}</Text>
                   </View>
                 </View>
@@ -230,7 +236,7 @@ export default function PlayerPrivateTrainingDetailsScreen() {
                   <Ionicons name="cash" size={20} color="#000" />
                 </View>
                 <View style={styles.detailContent}>
-                  <Text style={styles.detailLabel}>Session Fee</Text>
+                  <Text style={styles.detailLabel}>{i18n.t('sessionFee') || 'Session Fee'}</Text>
                   <Text style={styles.detailValue}>{program.fee} EGP</Text>
                 </View>
               </View>
@@ -240,8 +246,8 @@ export default function PlayerPrivateTrainingDetailsScreen() {
                   <Ionicons name="time" size={20} color="#000" />
                 </View>
                 <View style={styles.detailContent}>
-                  <Text style={styles.detailLabel}>Duration</Text>
-                  <Text style={styles.detailValue}>{program.duration} minutes</Text>
+                  <Text style={styles.detailLabel}>{i18n.t('durationLabel') || 'Duration'}</Text>
+                  <Text style={styles.detailValue}>{program.duration} {i18n.t('minutesShort') || 'minutes'}</Text>
                 </View>
               </View>
 
@@ -251,7 +257,7 @@ export default function PlayerPrivateTrainingDetailsScreen() {
                     <Ionicons name="calendar" size={20} color="#000" />
                   </View>
                   <View style={styles.detailContent}>
-                    <Text style={styles.detailLabel}>Availability</Text>
+                    <Text style={styles.detailLabel}>{i18n.t('availability') || 'Availability'}</Text>
                     <Text style={styles.detailValue}>{program.availability.general}</Text>
                   </View>
                 </View>
@@ -269,7 +275,7 @@ export default function PlayerPrivateTrainingDetailsScreen() {
               ) : (
                 <>
                   <Ionicons name="calendar-outline" size={20} color="#fff" style={styles.reserveIcon} />
-                  <Text style={styles.reserveButtonText}>Book Session - {program.fee} EGP</Text>
+                  <Text style={styles.reserveButtonText}>{i18n.t('bookSession') || 'Book Session'} - {program.fee} EGP</Text>
                 </>
               )}
             </TouchableOpacity>

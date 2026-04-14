@@ -12,6 +12,7 @@ cloudinary.config({
 
 // Upload limits
 const MAX_VIDEO_SIZE = 500 * 1024 * 1024; // 500MB
+const MAX_VIDEO_DURATION_SEC = 600; // 10 minutes
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB
 const MAX_VIDEOS_PER_POST = 5;
 const MAX_IMAGES_PER_POST = 10;
@@ -87,7 +88,7 @@ export async function validateFileSize(req: Request, res: Response): Promise<voi
       return;
     }
 
-    const { size, resourceType } = req.body;
+    const { size, resourceType, durationSec } = req.body;
 
     if (!size || typeof size !== 'number') {
       sendError(res, 'BAD_REQUEST', 'File size is required', null, 400);
@@ -102,6 +103,17 @@ export async function validateFileSize(req: Request, res: Response): Promise<voi
     const maxSize = resourceType === 'video' ? MAX_VIDEO_SIZE : MAX_IMAGE_SIZE;
     const maxSizeMB = resourceType === 'video' ? 500 : 10;
 
+    if (resourceType === 'video' && typeof durationSec === 'number' && durationSec > MAX_VIDEO_DURATION_SEC) {
+      sendError(
+        res,
+        'VIDEO_TOO_LONG',
+        `Video duration exceeds maximum allowed length of ${MAX_VIDEO_DURATION_SEC} seconds`,
+        { maxDurationSec: MAX_VIDEO_DURATION_SEC, actualDurationSec: durationSec },
+        400
+      );
+      return;
+    }
+
     if (size > maxSize) {
       sendError(
         res,
@@ -113,7 +125,12 @@ export async function validateFileSize(req: Request, res: Response): Promise<voi
       return;
     }
 
-    sendSuccess(res, { valid: true, size, maxSize }, 'File size is valid');
+    sendSuccess(res, {
+      valid: true,
+      size,
+      maxSize,
+      ...(resourceType === 'video' ? { maxDurationSec: MAX_VIDEO_DURATION_SEC } : {}),
+    }, 'File size is valid');
   } catch (error: any) {
     console.error('File size validation error:', error);
     sendError(res, 'INTERNAL_ERROR', error.message || 'Failed to validate file size', null, 500);
@@ -254,6 +271,7 @@ export async function getUploadLimits(req: Request, res: Response): Promise<void
       video: {
         maxSizeBytes: MAX_VIDEO_SIZE,
         maxSizeMB: 500,
+        maxDurationSec: MAX_VIDEO_DURATION_SEC,
         maxPerPost: MAX_VIDEOS_PER_POST,
       },
       image: {

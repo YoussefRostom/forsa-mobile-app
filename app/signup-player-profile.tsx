@@ -81,12 +81,15 @@ const SignupPlayer = () => {
   const [errors, setErrors] = useState<Errors>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [missing, setMissing] = useState<{ [key: string]: boolean }>({});
+  const [focusedField, setFocusedField] = useState<string | null>(null);
   // OTP functionality commented out - direct Firebase signup enabled
   // const [showOtpModal, setShowOtpModal] = useState(false);
   // const [otpPhone, setOtpPhone] = useState('');  // normalized E.164 phone
 
   // Animation for transitions
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const scrollViewRef = useRef<ScrollView | null>(null);
+  const fieldLayouts = useRef<Record<string, number>>({});
 
   React.useEffect(() => {
     Animated.timing(fadeAnim, {
@@ -182,6 +185,18 @@ const SignupPlayer = () => {
     return error === null;
   };
 
+  const registerFieldLayout = (field: keyof Errors, y: number) => {
+    fieldLayouts.current[field] = y;
+  };
+
+  const scrollToField = (field: keyof Errors) => {
+    const y = fieldLayouts.current[field];
+    scrollViewRef.current?.scrollTo({
+      y: typeof y === 'number' ? Math.max(0, y - 120) : 0,
+      animated: true,
+    });
+  };
+
   const validate = () => {
     const newErrors: Errors = {};
     const newMissing: { [key: string]: boolean } = {};
@@ -249,7 +264,17 @@ const SignupPlayer = () => {
 
     setErrors(newErrors);
     setMissing(newMissing);
-    return Object.keys(newErrors).length === 0;
+
+    const hasErrors = Object.keys(newErrors).length > 0;
+    if (hasErrors) {
+      const fieldOrder: (keyof Errors)[] = ['firstName', 'lastName', 'dob', 'position', 'city', 'phone', 'email', 'password'];
+      const firstInvalidField = fieldOrder.find((field) => Boolean(newErrors[field]));
+      if (firstInvalidField) {
+        requestAnimationFrame(() => scrollToField(firstInvalidField));
+      }
+    }
+
+    return !hasErrors;
   };
 
 
@@ -309,6 +334,8 @@ const SignupPlayer = () => {
       const userData = {
         uid,
         role: 'player',
+        status: 'active',
+        isSuspended: false,
         email: email && email.trim().length > 0 ? email.trim() : null,
         phone,
         firstName,
@@ -418,6 +445,17 @@ const SignupPlayer = () => {
     );
   };
 
+  const requiredSteps = [
+    Boolean(firstName.trim() && lastName.trim()),
+    Boolean(dob),
+    Boolean(position),
+    Boolean(city),
+    Boolean(phone.trim()) && !errors.phone,
+    Boolean(password.trim()) && !errors.password,
+  ];
+  const completedRequiredCount = requiredSteps.filter(Boolean).length;
+  const completionPercent = Math.round((completedRequiredCount / requiredSteps.length) * 100);
+
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <LinearGradient
@@ -449,6 +487,7 @@ const SignupPlayer = () => {
           </View>
 
           <ScrollView
+            ref={scrollViewRef}
             contentContainerStyle={styles.scrollContent}
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
@@ -459,7 +498,7 @@ const SignupPlayer = () => {
                 <Text style={styles.errorSubmitText}>{formError}</Text>
               </View>
             )}
-            {/* Profile Picture Picker */}
+
             <View style={styles.profileSection}>
               <TouchableOpacity onPress={pickImage} style={styles.profileImageContainer}>
                 {profilePhoto ? (
@@ -473,320 +512,466 @@ const SignupPlayer = () => {
                   <Ionicons name="camera" size={20} color="#fff" />
                 </View>
               </TouchableOpacity>
-              <Text style={styles.profileLabel}>
-                {i18n.t('profile_picture')}
+              <Text style={styles.profileLabel}>{i18n.t('profile_picture')}</Text>
+              <Text style={styles.profileHint}>
+                {profilePhoto
+                  ? (i18n.t('profilePhotoReady') || 'Great — your profile photo is ready.')
+                  : (i18n.t('profilePhotoRecommended') || 'Optional, but highly recommended so your profile looks complete and professional.')}
               </Text>
+              <View style={[styles.profileStatusPill, profilePhoto && styles.profileStatusPillSuccess]}>
+                <Ionicons
+                  name={profilePhoto ? 'checkmark-circle' : 'sparkles-outline'}
+                  size={16}
+                  color={profilePhoto ? '#166534' : '#374151'}
+                />
+                <Text style={[styles.profileStatusText, profilePhoto && styles.profileStatusTextSuccess]}>
+                  {profilePhoto ? (i18n.t('profileReady') || 'Profile image added') : (i18n.t('optionalRecommended') || 'Optional but recommended')}
+                </Text>
+              </View>
             </View>
-            {/* Form Fields */}
+
+            <View style={styles.progressCard}>
+              <View style={styles.progressHeaderRow}>
+                <View style={styles.progressTitleWrap}>
+                  <Text style={styles.progressTitle}>{i18n.t('completeYourProfile') || 'Complete your player profile'}</Text>
+                  <Text style={styles.progressSubtitle}>
+                    {i18n.t('playerSignupProgressHint') || 'A complete profile helps academies and clinics review you faster.'}
+                  </Text>
+                </View>
+                <View style={styles.progressBadge}>
+                  <Text style={styles.progressBadgeText}>{completedRequiredCount}/{requiredSteps.length}</Text>
+                </View>
+              </View>
+              <View style={styles.progressTrack}>
+                <View style={[styles.progressFill, { width: `${completionPercent}%` }]} />
+              </View>
+            </View>
+
             <View style={styles.formCard}>
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>
-                  {i18n.t('first_name')}
-                  <Text style={styles.required}> *</Text>
-                </Text>
-                <View style={[styles.inputWrapper, missing.firstName && styles.inputWrapperError]}>
-                  <Ionicons name="person-outline" size={20} color="#999" style={styles.inputIcon} />
-                  <TextInput
-                    style={styles.input}
-                    value={firstName}
-                    onChangeText={t => { setFirstName(t); if (missing.firstName) setMissing(m => ({ ...m, firstName: false })); validateField('firstName', t); }}
-                    autoCapitalize="words"
-                    placeholder={i18n.t('first_name_ph')}
-                    placeholderTextColor="#999"
-                  />
+              <View style={styles.sectionBlock}>
+                <View style={styles.sectionHeaderRow}>
+                  <View style={styles.sectionIconBadge}>
+                    <Ionicons name="person-circle-outline" size={18} color="#000" />
+                  </View>
+                  <View style={styles.sectionTitleWrap}>
+                    <Text style={styles.sectionTitle}>{i18n.t('personalInformation') || 'Personal information'}</Text>
+                    <Text style={styles.sectionDescription}>
+                      {i18n.t('playerPersonalSectionHint') || 'Keep your core details accurate and easy to verify.'}
+                    </Text>
+                  </View>
                 </View>
-                {errors.firstName && <Text style={styles.errorText}>{errors.firstName}</Text>}
-              </View>
 
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>
-                  {i18n.t('last_name')}
-                  <Text style={styles.required}> *</Text>
-                </Text>
-                <View style={[styles.inputWrapper, missing.lastName && styles.inputWrapperError]}>
-                  <Ionicons name="person-outline" size={20} color="#999" style={styles.inputIcon} />
-                  <TextInput
-                    style={styles.input}
-                    value={lastName}
-                    onChangeText={t => { setLastName(t); if (missing.lastName) setMissing(m => ({ ...m, lastName: false })); validateField('lastName', t); }}
-                    autoCapitalize="words"
-                    placeholder={i18n.t('last_name_ph')}
-                    placeholderTextColor="#999"
-                  />
-                </View>
-                {errors.lastName && <Text style={styles.errorText}>{errors.lastName}</Text>}
-              </View>
-
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>
-                  {i18n.t('dob')}
-                  <Text style={styles.required}> *</Text>
-                </Text>
-                <TouchableOpacity
-                  style={[styles.inputWrapper, styles.datePickerWrapper, missing.dob && styles.inputWrapperError]}
-                  onPress={() => setShowDatePicker(true)}
-                >
-                  <Ionicons name="calendar-outline" size={20} color="#999" style={styles.inputIcon} />
-                  <Text style={[styles.dateText, !dob && styles.datePlaceholder]}>
-                    {dob ? formatDate(dob) : i18n.t('dob_ph') || 'Select date of birth'}
+                <View style={styles.inputGroup} onLayout={(e) => registerFieldLayout('firstName', e.nativeEvent.layout.y)}>
+                  <Text style={styles.label}>
+                    {i18n.t('first_name')}
+                    <Text style={styles.required}> *</Text>
                   </Text>
-                </TouchableOpacity>
-                {errors.dob && <Text style={styles.errorText}>{errors.dob}</Text>}
-                {showDatePicker && Platform.OS === 'android' && (
-                  <DateTimePicker
-                    value={dob || new Date(2010, 0, 1)}
-                    mode="date"
-                    display="default"
-                    onChange={onDateChange}
-                    maximumDate={new Date()}
-                    minimumDate={new Date(1920, 0, 1)}
-                  />
-                )}
-                {Platform.OS === 'ios' && showDatePicker && (
-                  <Modal
-                    visible={showDatePicker}
-                    transparent={true}
-                    animationType="slide"
-                    onRequestClose={() => setShowDatePicker(false)}
-                  >
-                    <View style={styles.iosDatePickerModal}>
-                      <View style={styles.iosDatePickerHeader}>
-                        <TouchableOpacity
-                          style={styles.datePickerButton}
-                          onPress={() => setShowDatePicker(false)}
-                        >
-                          <Text style={styles.datePickerButtonText}>{i18n.t('done') || 'Done'}</Text>
-                        </TouchableOpacity>
-                      </View>
-                      <DateTimePicker
-                        value={dob || new Date(2010, 0, 1)}
-                        mode="date"
-                        display="spinner"
-                        onChange={onDateChange}
-                        maximumDate={new Date()}
-                        minimumDate={new Date(1920, 0, 1)}
-                        style={styles.iosDatePicker}
-                        textColor="#000"
-                      />
-                    </View>
-                  </Modal>
-                )}
-              </View>
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>
-                  {i18n.t('position')}
-                  <Text style={styles.required}> *</Text>
-                </Text>
-                <View style={styles.positionsRow}>
-                  {POSITIONS.map(pos => (
-                    <TouchableOpacity
-                      key={pos}
-                      style={[styles.positionBtn, position === pos && styles.positionBtnSelected]}
-                      onPress={() => { setPosition(pos); if (missing.position) setMissing(m => ({ ...m, position: false })); validateField('position', pos); }}
-                    >
-                      <Text style={[styles.positionBtnText, position === pos && styles.positionBtnTextSelected]}>{i18n.t(pos)}</Text>
-                    </TouchableOpacity>
-                  ))}
+                  <View style={[styles.inputWrapper, focusedField === 'firstName' && styles.inputWrapperFocused, missing.firstName && styles.inputWrapperError]}>
+                    <Ionicons name="person-outline" size={20} color="#999" style={styles.inputIcon} />
+                    <TextInput
+                      style={styles.input}
+                      value={firstName}
+                      onFocus={() => setFocusedField('firstName')}
+                      onBlur={() => setFocusedField(null)}
+                      onChangeText={t => { setFirstName(t); if (missing.firstName) setMissing(m => ({ ...m, firstName: false })); validateField('firstName', t); }}
+                      autoCapitalize="words"
+                      placeholder={i18n.t('first_name_ph')}
+                      placeholderTextColor="#999"
+                    />
+                  </View>
+                  {errors.firstName && <Text style={styles.errorText}>{errors.firstName}</Text>}
                 </View>
-                {errors.position && <Text style={styles.errorText}>{errors.position}</Text>}
-              </View>
 
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>{i18n.t('alternate_positions')}</Text>
-                <View style={styles.positionsRow}>
-                  {POSITIONS.map(pos => (
-                    <TouchableOpacity
-                      key={pos}
-                      style={[styles.positionBtn, altPositions.includes(pos) && styles.positionBtnSelected]}
-                      onPress={() => handleAltPositionToggle(pos)}
-                    >
-                      <Text style={[styles.positionBtnText, altPositions.includes(pos) && styles.positionBtnTextSelected]}>{i18n.t(pos)}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </View>
-
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>
-                  {i18n.t('city')}
-                  <Text style={styles.required}> *</Text>
-                </Text>
-                <TouchableOpacity
-                  style={[styles.inputWrapper, styles.cityPickerWrapper, missing.city && styles.inputWrapperError]}
-                  onPress={() => setShowCityModal(true)}
-                >
-                  <Ionicons name="location-outline" size={20} color="#999" style={styles.inputIcon} />
-                  <Text style={[styles.cityText, !city && styles.cityPlaceholder]}>
-                    {city ? (i18n.t('cities', { returnObjects: true }) as Record<string, string>)[city] || city : i18n.t('selectCity')}
+                <View style={styles.inputGroup} onLayout={(e) => registerFieldLayout('lastName', e.nativeEvent.layout.y)}>
+                  <Text style={styles.label}>
+                    {i18n.t('last_name')}
+                    <Text style={styles.required}> *</Text>
                   </Text>
-                  <Ionicons name="chevron-down" size={20} color="#999" />
-                </TouchableOpacity>
-                {errors.city && <Text style={styles.errorText}>{errors.city}</Text>}
+                  <View style={[styles.inputWrapper, focusedField === 'lastName' && styles.inputWrapperFocused, missing.lastName && styles.inputWrapperError]}>
+                    <Ionicons name="person-outline" size={20} color="#999" style={styles.inputIcon} />
+                    <TextInput
+                      style={styles.input}
+                      value={lastName}
+                      onFocus={() => setFocusedField('lastName')}
+                      onBlur={() => setFocusedField(null)}
+                      onChangeText={t => { setLastName(t); if (missing.lastName) setMissing(m => ({ ...m, lastName: false })); validateField('lastName', t); }}
+                      autoCapitalize="words"
+                      placeholder={i18n.t('last_name_ph')}
+                      placeholderTextColor="#999"
+                    />
+                  </View>
+                  {errors.lastName && <Text style={styles.errorText}>{errors.lastName}</Text>}
+                </View>
 
-                {/* City Selection Modal */}
-                <Modal
-                  visible={showCityModal}
-                  transparent={true}
-                  animationType="fade"
-                  onRequestClose={() => setShowCityModal(false)}
-                >
+                <View style={styles.inputGroup} onLayout={(e) => registerFieldLayout('dob', e.nativeEvent.layout.y)}>
+                  <Text style={styles.label}>
+                    {i18n.t('dob')}
+                    <Text style={styles.required}> *</Text>
+                  </Text>
                   <TouchableOpacity
-                    style={styles.modalOverlay}
-                    activeOpacity={1}
-                    onPress={() => setShowCityModal(false)}
+                    style={[styles.inputWrapper, focusedField === 'dob' && styles.inputWrapperFocused, styles.datePickerWrapper, missing.dob && styles.inputWrapperError]}
+                    onPress={() => { setFocusedField('dob'); setShowDatePicker(true); }}
                   >
-                    <View style={styles.modalContent}>
-                      <View style={styles.modalHeader}>
-                        <Text style={styles.modalTitle}>{i18n.t('selectCity')}</Text>
-                        <TouchableOpacity onPress={() => setShowCityModal(false)}>
-                          <Ionicons name="close" size={24} color="#000" />
-                        </TouchableOpacity>
-                      </View>
-                      <ScrollView style={styles.modalScrollView} showsVerticalScrollIndicator={true}>
-                        {Object.entries(i18n.t('cities', { returnObjects: true }) as Record<string, string>).map(([key, label]) => (
-                          <TouchableOpacity
-                            key={key}
-                            style={[styles.cityOption, city === key && styles.cityOptionSelected]}
-                            onPress={() => {
-                              setCity(key);
-                              if (missing.city) setMissing(m => ({ ...m, city: false }));
-                              validateField('city', key);
-                              setShowCityModal(false);
-                            }}
-                          >
-                            <Text style={[styles.cityOptionText, city === key && styles.cityOptionTextSelected]}>
-                              {label}
-                            </Text>
-                            {city === key && (
-                              <Ionicons name="checkmark" size={20} color="#fff" />
-                            )}
-                          </TouchableOpacity>
-                        ))}
-                      </ScrollView>
-                    </View>
+                    <Ionicons name="calendar-outline" size={20} color="#999" style={styles.inputIcon} />
+                    <Text style={[styles.dateText, !dob && styles.datePlaceholder]}>
+                      {dob ? formatDate(dob) : i18n.t('dob_ph') || 'Select date of birth'}
+                    </Text>
                   </TouchableOpacity>
-                </Modal>
-              </View>
-
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>{i18n.t('highlight_video')}</Text>
-                <View style={styles.inputWrapper}>
-                  <Ionicons name="videocam-outline" size={20} color="#999" style={styles.inputIcon} />
-                  <TextInput
-                    style={styles.input}
-                    value={highlightVideo}
-                    onChangeText={setHighlightVideo}
-                    autoCapitalize="none"
-                    placeholder={i18n.t('highlight_video_ph')}
-                    placeholderTextColor="#999"
-                  />
-                </View>
-              </View>
-
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>
-                  {i18n.t('phone')}
-                  <Text style={styles.required}> *</Text>
-                </Text>
-                <View style={[styles.inputWrapper, missing.phone && styles.inputWrapperError]}>
-                  <Ionicons name="call-outline" size={20} color="#999" style={styles.inputIcon} />
-                  <TextInput
-                    style={styles.input}
-                    value={phone}
-                    onChangeText={t => { setPhone(t); if (missing.phone) setMissing(m => ({ ...m, phone: false })); validateField('phone', t); }}
-                    keyboardType="phone-pad"
-                    placeholder={i18n.t('phone_ph')}
-                    placeholderTextColor="#999"
-                  />
-                </View>
-                {errors.phone && <Text style={styles.errorText}>{errors.phone}</Text>}
-              </View>
-
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>
-                  {i18n.t('email_address') || 'Email Address'} <Text style={{ color: '#999', fontSize: 14 }}>(Optional)</Text>
-                </Text>
-                <View style={[styles.inputWrapper, missing.email && styles.inputWrapperError]}>
-                  <Ionicons name="mail-outline" size={20} color="#999" style={styles.inputIcon} />
-                  <TextInput
-                    style={styles.input}
-                    value={email}
-                    onChangeText={t => {
-                      setEmail(t);
-                      if (missing.email) setMissing(m => ({ ...m, email: false }));
-                      // Only validate if email is provided
-                      if (t && t.trim().length > 0) {
-                        validateField('email', t);
-                      } else {
-                        // Clear error if field is empty (since it's optional)
-                        setErrors(prev => {
-                          const newErrors = { ...prev };
-                          delete newErrors.email;
-                          return newErrors;
-                        });
-                        setMissing(prev => {
-                          const newMissing = { ...prev };
-                          delete newMissing.email;
-                          return newMissing;
-                        });
-                      }
-                    }}
-                    autoCapitalize="none"
-                    keyboardType="email-address"
-                    placeholder={i18n.t('email_address_ph') || 'Enter your email address (optional)'}
-                    placeholderTextColor="#999"
-                  />
-                </View>
-                {errors.email && <Text style={styles.errorText}>{errors.email}</Text>}
-              </View>
-
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>
-                  {i18n.t('password')}
-                  <Text style={styles.required}> *</Text>
-                </Text>
-                <View style={[styles.inputWrapper, missing.password && styles.inputWrapperError]}>
-                  <Ionicons name="lock-closed-outline" size={20} color="#999" style={styles.inputIcon} />
-                  <TextInput
-                    style={styles.input}
-                    value={password}
-                    onChangeText={t => { setPassword(t); if (missing.password) setMissing(m => ({ ...m, password: false })); validateField('password', t); }}
-                    secureTextEntry
-                    placeholder={i18n.t('password_ph')}
-                    placeholderTextColor="#999"
-                  />
-                </View>
-                {errors.password && <Text style={styles.errorText}>{errors.password}</Text>}
-              </View>
-
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>
-                  {i18n.t('national_id_photo')}
-                </Text>
-                <TouchableOpacity onPress={pickNationalIdPhoto} style={styles.nationalIdContainer}>
-                  {nationalIdPhoto ? (
-                    <Image source={{ uri: nationalIdPhoto }} style={styles.nationalIdImage} />
-                  ) : (
-                    <View style={styles.nationalIdPlaceholder}>
-                      <Ionicons name="document-outline" size={32} color="#999" />
-                      <Text style={styles.nationalIdText}>{i18n.t('upload_national_id') || 'Upload National ID'}</Text>
-                    </View>
+                  {errors.dob && <Text style={styles.errorText}>{errors.dob}</Text>}
+                  {showDatePicker && Platform.OS === 'android' && (
+                    <DateTimePicker
+                      value={dob || new Date(2010, 0, 1)}
+                      mode="date"
+                      display="default"
+                      onChange={onDateChange}
+                      maximumDate={new Date()}
+                      minimumDate={new Date(1920, 0, 1)}
+                    />
                   )}
+                  {Platform.OS === 'ios' && showDatePicker && (
+                    <Modal
+                      visible={showDatePicker}
+                      transparent={true}
+                      animationType="slide"
+                      onRequestClose={() => setShowDatePicker(false)}
+                    >
+                      <View style={styles.iosDatePickerModal}>
+                        <View style={styles.iosDatePickerHeader}>
+                          <TouchableOpacity
+                            style={styles.datePickerButton}
+                            onPress={() => setShowDatePicker(false)}
+                          >
+                            <Text style={styles.datePickerButtonText}>{i18n.t('done') || 'Done'}</Text>
+                          </TouchableOpacity>
+                        </View>
+                        <DateTimePicker
+                          value={dob || new Date(2010, 0, 1)}
+                          mode="date"
+                          display="spinner"
+                          onChange={onDateChange}
+                          maximumDate={new Date()}
+                          minimumDate={new Date(1920, 0, 1)}
+                          style={styles.iosDatePicker}
+                          textColor="#000"
+                        />
+                      </View>
+                    </Modal>
+                  )}
+                </View>
+
+                <View style={styles.inputGroup} onLayout={(e) => registerFieldLayout('city', e.nativeEvent.layout.y)}>
+                  <Text style={styles.label}>
+                    {i18n.t('city')}
+                    <Text style={styles.required}> *</Text>
+                  </Text>
+                  <TouchableOpacity
+                    style={[styles.inputWrapper, focusedField === 'city' && styles.inputWrapperFocused, styles.cityPickerWrapper, missing.city && styles.inputWrapperError]}
+                    onPress={() => { setFocusedField('city'); setShowCityModal(true); }}
+                  >
+                    <Ionicons name="location-outline" size={20} color="#999" style={styles.inputIcon} />
+                    <Text style={[styles.cityText, !city && styles.cityPlaceholder]}>
+                      {city ? (i18n.t('cities', { returnObjects: true }) as Record<string, string>)[city] || city : i18n.t('selectCity')}
+                    </Text>
+                    <Ionicons name="chevron-down" size={20} color="#999" />
+                  </TouchableOpacity>
+                  {errors.city && <Text style={styles.errorText}>{errors.city}</Text>}
+
+                  <Modal
+                    visible={showCityModal}
+                    transparent={true}
+                    animationType="fade"
+                    onRequestClose={() => setShowCityModal(false)}
+                  >
+                    <TouchableOpacity
+                      style={styles.modalOverlay}
+                      activeOpacity={1}
+                      onPress={() => setShowCityModal(false)}
+                    >
+                      <View style={styles.modalContent}>
+                        <View style={styles.modalHeader}>
+                          <Text style={styles.modalTitle}>{i18n.t('selectCity')}</Text>
+                          <TouchableOpacity onPress={() => setShowCityModal(false)}>
+                            <Ionicons name="close" size={24} color="#000" />
+                          </TouchableOpacity>
+                        </View>
+                        <ScrollView style={styles.modalScrollView} showsVerticalScrollIndicator={true}>
+                          {Object.entries(i18n.t('cities', { returnObjects: true }) as Record<string, string>).map(([key, label]) => (
+                            <TouchableOpacity
+                              key={key}
+                              style={[styles.cityOption, city === key && styles.cityOptionSelected]}
+                              onPress={() => {
+                                setCity(key);
+                                if (missing.city) setMissing(m => ({ ...m, city: false }));
+                                validateField('city', key);
+                                setShowCityModal(false);
+                              }}
+                            >
+                              <Text style={[styles.cityOptionText, city === key && styles.cityOptionTextSelected]}>
+                                {label}
+                              </Text>
+                              {city === key && (
+                                <Ionicons name="checkmark" size={20} color="#fff" />
+                              )}
+                            </TouchableOpacity>
+                          ))}
+                        </ScrollView>
+                      </View>
+                    </TouchableOpacity>
+                  </Modal>
+                </View>
+              </View>
+
+              <View style={styles.sectionDivider} />
+
+              <View style={styles.sectionBlock}>
+                <View style={styles.sectionHeaderRow}>
+                  <View style={styles.sectionIconBadge}>
+                    <Ionicons name="football-outline" size={18} color="#000" />
+                  </View>
+                  <View style={styles.sectionTitleWrap}>
+                    <Text style={styles.sectionTitle}>{i18n.t('playerProfile') || 'Football profile'}</Text>
+                    <Text style={styles.sectionDescription}>
+                      {i18n.t('playerFootballSectionHint') || 'Show your main role clearly and add your highlight link if available.'}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.inputGroup} onLayout={(e) => registerFieldLayout('position', e.nativeEvent.layout.y)}>
+                  <Text style={styles.label}>
+                    {i18n.t('position')}
+                    <Text style={styles.required}> *</Text>
+                  </Text>
+                  <View style={styles.positionsRow}>
+                    {POSITIONS.map(pos => (
+                      <TouchableOpacity
+                        key={pos}
+                        style={[styles.positionBtn, position === pos && styles.positionBtnSelected]}
+                        onPress={() => { setPosition(pos); if (missing.position) setMissing(m => ({ ...m, position: false })); validateField('position', pos); }}
+                      >
+                        <Text style={[styles.positionBtnText, position === pos && styles.positionBtnTextSelected]}>{i18n.t(pos)}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  {errors.position && <Text style={styles.errorText}>{errors.position}</Text>}
+                  {position ? (
+                    <View style={styles.selectionInfoRow}>
+                      <View style={styles.selectionInfoPill}>
+                        <Ionicons name="checkmark-circle" size={15} color="#166534" />
+                        <Text style={styles.selectionInfoText}>
+                          {i18n.t('primaryPositionSelected', { position: i18n.t(position) })}
+                        </Text>
+                      </View>
+                    </View>
+                  ) : (
+                    <Text style={styles.fieldHelperText}>{i18n.t('primaryPositionHint')}</Text>
+                  )}
+                </View>
+
+                <View style={styles.inputGroup}>
+                  <Text style={styles.label}>{i18n.t('alternate_positions')}</Text>
+                  <View style={styles.positionsRow}>
+                    {POSITIONS.map(pos => (
+                      <TouchableOpacity
+                        key={pos}
+                        style={[styles.positionBtn, altPositions.includes(pos) && styles.positionBtnSelected]}
+                        onPress={() => handleAltPositionToggle(pos)}
+                      >
+                        <Text style={[styles.positionBtnText, altPositions.includes(pos) && styles.positionBtnTextSelected]}>{i18n.t(pos)}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                  <Text style={styles.fieldHelperText}>
+                    {altPositions.length > 0
+                      ? i18n.t('alternatePositionsSelected', { count: altPositions.length })
+                      : i18n.t('alternatePositionsHint')}
+                  </Text>
+                </View>
+
+                <View style={styles.inputGroup}>
+                  <Text style={styles.label}>{i18n.t('highlight_video')}</Text>
+                  <View style={styles.inputWrapper}>
+                    <Ionicons name="videocam-outline" size={20} color="#999" style={styles.inputIcon} />
+                    <TextInput
+                      style={styles.input}
+                      value={highlightVideo}
+                      onChangeText={setHighlightVideo}
+                      autoCapitalize="none"
+                      placeholder={i18n.t('highlight_video_ph')}
+                      placeholderTextColor="#999"
+                    />
+                  </View>
+                  <View style={styles.mediaTipCard}>
+                    <Ionicons name="sparkles-outline" size={16} color="#111827" style={styles.mediaTipIcon} />
+                    <Text style={styles.mediaTipText}>{i18n.t('highlightVideoHint')}</Text>
+                  </View>
+                </View>
+              </View>
+
+              <View style={styles.sectionDivider} />
+
+              <View style={styles.sectionBlock}>
+                <View style={styles.sectionHeaderRow}>
+                  <View style={styles.sectionIconBadge}>
+                    <Ionicons name="shield-checkmark-outline" size={18} color="#000" />
+                  </View>
+                  <View style={styles.sectionTitleWrap}>
+                    <Text style={styles.sectionTitle}>{i18n.t('accountDetails') || 'Account details'}</Text>
+                    <Text style={styles.sectionDescription}>
+                      {i18n.t('playerAccountSectionHint') || 'These details are used to secure your account and keep your profile reachable.'}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.inputGroup} onLayout={(e) => registerFieldLayout('phone', e.nativeEvent.layout.y)}>
+                  <Text style={styles.label}>
+                    {i18n.t('phone')}
+                    <Text style={styles.required}> *</Text>
+                  </Text>
+                  <View style={[styles.inputWrapper, focusedField === 'phone' && styles.inputWrapperFocused, missing.phone && styles.inputWrapperError]}>
+                    <Ionicons name="call-outline" size={20} color="#999" style={styles.inputIcon} />
+                    <TextInput
+                      style={styles.input}
+                      value={phone}
+                      onFocus={() => setFocusedField('phone')}
+                      onBlur={() => setFocusedField(null)}
+                      onChangeText={t => { setPhone(t); if (missing.phone) setMissing(m => ({ ...m, phone: false })); validateField('phone', t); }}
+                      keyboardType="phone-pad"
+                      placeholder={i18n.t('phone_ph')}
+                      placeholderTextColor="#999"
+                    />
+                  </View>
+                  {errors.phone && <Text style={styles.errorText}>{errors.phone}</Text>}
+                  <Text style={styles.fieldHelperText}>{i18n.t('phoneSecurityHint')}</Text>
+                </View>
+
+                <View style={styles.inputGroup} onLayout={(e) => registerFieldLayout('email', e.nativeEvent.layout.y)}>
+                  <Text style={styles.label}>
+                    {i18n.t('email_address') || 'Email Address'} <Text style={{ color: '#999', fontSize: 14 }}>(Optional)</Text>
+                  </Text>
+                  <View style={[styles.inputWrapper, focusedField === 'email' && styles.inputWrapperFocused, missing.email && styles.inputWrapperError]}>
+                    <Ionicons name="mail-outline" size={20} color="#999" style={styles.inputIcon} />
+                    <TextInput
+                      style={styles.input}
+                      value={email}
+                      onFocus={() => setFocusedField('email')}
+                      onBlur={() => setFocusedField(null)}
+                      onChangeText={t => {
+                        setEmail(t);
+                        if (missing.email) setMissing(m => ({ ...m, email: false }));
+                        if (t && t.trim().length > 0) {
+                          validateField('email', t);
+                        } else {
+                          setErrors(prev => {
+                            const newErrors = { ...prev };
+                            delete newErrors.email;
+                            return newErrors;
+                          });
+                          setMissing(prev => {
+                            const newMissing = { ...prev };
+                            delete newMissing.email;
+                            return newMissing;
+                          });
+                        }
+                      }}
+                      autoCapitalize="none"
+                      keyboardType="email-address"
+                      placeholder={i18n.t('email_address_ph') || 'Enter your email address (optional)'}
+                      placeholderTextColor="#999"
+                    />
+                  </View>
+                  {errors.email && <Text style={styles.errorText}>{errors.email}</Text>}
+                </View>
+
+                <View style={styles.inputGroup} onLayout={(e) => registerFieldLayout('password', e.nativeEvent.layout.y)}>
+                  <Text style={styles.label}>
+                    {i18n.t('password')}
+                    <Text style={styles.required}> *</Text>
+                  </Text>
+                  <View style={[styles.inputWrapper, focusedField === 'password' && styles.inputWrapperFocused, missing.password && styles.inputWrapperError]}>
+                    <Ionicons name="lock-closed-outline" size={20} color="#999" style={styles.inputIcon} />
+                    <TextInput
+                      style={styles.input}
+                      value={password}
+                      onFocus={() => setFocusedField('password')}
+                      onBlur={() => setFocusedField(null)}
+                      onChangeText={t => { setPassword(t); if (missing.password) setMissing(m => ({ ...m, password: false })); validateField('password', t); }}
+                      secureTextEntry
+                      placeholder={i18n.t('password_ph')}
+                      placeholderTextColor="#999"
+                    />
+                  </View>
+                  {errors.password && <Text style={styles.errorText}>{errors.password}</Text>}
+                  <Text style={styles.fieldHelperText}>{i18n.t('passwordSecurityHint')}</Text>
+                </View>
+              </View>
+
+              <View style={styles.sectionDivider} />
+
+              <View style={styles.sectionBlock}>
+                <View style={styles.sectionHeaderRow}>
+                  <View style={styles.sectionIconBadge}>
+                    <Ionicons name="document-text-outline" size={18} color="#000" />
+                  </View>
+                  <View style={styles.sectionTitleWrap}>
+                    <Text style={styles.sectionTitle}>{i18n.t('verification') || 'Verification'}</Text>
+                    <Text style={styles.sectionDescription}>
+                      {i18n.t('playerVerificationHint') || 'Upload your ID if you want a more complete and trusted profile later on.'}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.inputGroup}>
+                  <Text style={styles.label}>{i18n.t('national_id_photo')}</Text>
+                  <TouchableOpacity onPress={pickNationalIdPhoto} style={styles.nationalIdContainer}>
+                    {nationalIdPhoto ? (
+                      <Image source={{ uri: nationalIdPhoto }} style={styles.nationalIdImage} />
+                    ) : (
+                      <View style={styles.nationalIdPlaceholder}>
+                        <Ionicons name="document-outline" size={32} color="#999" />
+                        <Text style={styles.nationalIdText}>{i18n.t('upload_national_id') || 'Upload National ID'}</Text>
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                  <View style={[styles.verificationStatusRow, nationalIdPhoto && styles.verificationStatusRowReady]}>
+                    <Ionicons
+                      name={nationalIdPhoto ? 'checkmark-circle' : 'time-outline'}
+                      size={15}
+                      color={nationalIdPhoto ? '#166534' : '#92400e'}
+                    />
+                    <Text style={[styles.verificationStatusText, nationalIdPhoto && styles.verificationStatusTextReady]}>
+                      {nationalIdPhoto ? i18n.t('nationalIdReady') : i18n.t('nationalIdPending')}
+                    </Text>
+                  </View>
+                  <Text style={styles.uploadHelperText}>
+                    {i18n.t('optionalVerificationHint') || 'Optional for now — adding it can help speed up future verification.'}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.submitPanel}>
+                <Text style={styles.submitHint}>
+                  {i18n.t('playerSubmitHint') || 'We are only polishing the experience — all your current fields stay exactly as they are.'}
+                </Text>
+                <View style={styles.submitTrustRow}>
+                  <Ionicons name="shield-checkmark-outline" size={16} color="#166534" />
+                  <Text style={styles.submitTrustText}>{i18n.t('secureSignupHint')}</Text>
+                </View>
+                <TouchableOpacity
+                  style={[styles.signupButton, loading && styles.signupButtonDisabled]}
+                  onPress={handleSignup}
+                  disabled={loading}
+                  activeOpacity={0.8}
+                >
+                  <View style={styles.signupButtonContent}>
+                    {loading ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <Ionicons name="checkmark-circle-outline" size={18} color="#fff" />
+                    )}
+                    <Text style={styles.signupButtonText}>{loading ? i18n.t('creatingAccount') : i18n.t('signup')}</Text>
+                  </View>
                 </TouchableOpacity>
               </View>
-
-              <TouchableOpacity
-                style={[styles.signupButton, loading && styles.signupButtonDisabled]}
-                onPress={handleSignup}
-                disabled={loading}
-                activeOpacity={0.8}
-              >
-                {loading ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <Text style={styles.signupButtonText}>{i18n.t('signup')}</Text>
-                )}
-              </TouchableOpacity>
             </View>
           </ScrollView>
         </Animated.View>
@@ -878,6 +1063,86 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#fff',
   },
+  profileHint: {
+    marginTop: 6,
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.72)',
+    textAlign: 'center',
+    lineHeight: 18,
+    paddingHorizontal: 12,
+  },
+  profileStatusPill: {
+    marginTop: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderRadius: 999,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+  },
+  profileStatusPillSuccess: {
+    backgroundColor: '#ecfdf5',
+  },
+  profileStatusText: {
+    color: '#e5e7eb',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  profileStatusTextSuccess: {
+    color: '#166534',
+  },
+  progressCard: {
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 18,
+    padding: 16,
+    marginBottom: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  progressHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 12,
+  },
+  progressTitleWrap: {
+    flex: 1,
+  },
+  progressTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#fff',
+    marginBottom: 4,
+  },
+  progressSubtitle: {
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.72)',
+    lineHeight: 18,
+  },
+  progressBadge: {
+    backgroundColor: '#fff',
+    borderRadius: 999,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+  },
+  progressBadgeText: {
+    color: '#000',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  progressTrack: {
+    height: 8,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderRadius: 999,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: '#fff',
+    borderRadius: 999,
+  },
   required: {
     color: '#ff3b30',
   },
@@ -891,6 +1156,42 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 20,
     elevation: 10,
+  },
+  sectionBlock: {
+    marginBottom: 4,
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 16,
+  },
+  sectionIconBadge: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#f3f4f6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  sectionTitleWrap: {
+    flex: 1,
+  },
+  sectionTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 4,
+  },
+  sectionDescription: {
+    fontSize: 13,
+    color: '#6b7280',
+    lineHeight: 18,
+  },
+  sectionDivider: {
+    height: 1,
+    backgroundColor: '#eceff3',
+    marginVertical: 18,
   },
   inputGroup: {
     marginBottom: 20,
@@ -910,6 +1211,15 @@ const styles = StyleSheet.create({
     borderColor: '#f5f5f5',
     paddingHorizontal: 16,
     minHeight: 56,
+  },
+  inputWrapperFocused: {
+    borderColor: '#111827',
+    backgroundColor: '#ffffff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 2,
   },
   inputWrapperError: {
     borderColor: '#ff3b30',
@@ -1080,25 +1390,76 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   positionBtn: {
-    borderWidth: 2,
-    borderColor: '#e0e0e0',
-    borderRadius: 20,
-    paddingVertical: 8,
+    borderWidth: 1.5,
+    borderColor: '#d1d5db',
+    borderRadius: 999,
+    paddingVertical: 10,
     paddingHorizontal: 16,
     margin: 2,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#f9fafb',
   },
   positionBtnSelected: {
-    backgroundColor: '#000',
-    borderColor: '#000',
+    backgroundColor: '#111827',
+    borderColor: '#111827',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    elevation: 3,
   },
   positionBtnText: {
-    color: '#000',
-    fontWeight: '600',
-    fontSize: 14,
+    color: '#111827',
+    fontWeight: '700',
+    fontSize: 13,
   },
   positionBtnTextSelected: {
     color: '#fff',
+  },
+  fieldHelperText: {
+    fontSize: 12,
+    color: '#6b7280',
+    lineHeight: 18,
+    marginTop: 8,
+    marginLeft: 2,
+  },
+  selectionInfoRow: {
+    flexDirection: 'row',
+    marginTop: 8,
+  },
+  selectionInfoPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#ecfdf5',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+  },
+  selectionInfoText: {
+    color: '#166534',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  mediaTipCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#f9fafb',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  mediaTipIcon: {
+    marginRight: 8,
+    marginTop: 1,
+  },
+  mediaTipText: {
+    flex: 1,
+    color: '#374151',
+    fontSize: 12,
+    lineHeight: 18,
   },
   nationalIdContainer: {
     width: '100%',
@@ -1127,6 +1488,60 @@ const styles = StyleSheet.create({
     color: '#999',
     fontSize: 14,
   },
+  uploadHelperText: {
+    marginTop: 8,
+    fontSize: 12,
+    color: '#6b7280',
+    lineHeight: 18,
+  },
+  verificationStatusRow: {
+    marginTop: 10,
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#fffbeb',
+    borderRadius: 999,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+  },
+  verificationStatusRowReady: {
+    backgroundColor: '#ecfdf5',
+  },
+  verificationStatusText: {
+    color: '#92400e',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  verificationStatusTextReady: {
+    color: '#166534',
+  },
+  submitPanel: {
+    marginTop: 4,
+  },
+  submitHint: {
+    fontSize: 13,
+    color: '#6b7280',
+    lineHeight: 18,
+    marginBottom: 12,
+  },
+  submitTrustRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f0fdf4',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginBottom: 12,
+  },
+  submitTrustText: {
+    marginLeft: 8,
+    flex: 1,
+    fontSize: 12,
+    color: '#166534',
+    fontWeight: '600',
+    lineHeight: 18,
+  },
   signupButton: {
     backgroundColor: '#000',
     borderRadius: 12,
@@ -1142,6 +1557,12 @@ const styles = StyleSheet.create({
   },
   signupButtonDisabled: {
     opacity: 0.6,
+  },
+  signupButtonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
   },
   signupButtonText: {
     color: '#fff',

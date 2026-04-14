@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
-import { Animated, Easing, FlatList, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View, ActivityIndicator, Image, Modal, Alert } from 'react-native';
+import { Animated, Easing, FlatList, Keyboard, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View, ActivityIndicator, Image, Modal, Alert } from 'react-native';
 import i18n from '../locales/i18n';
 import { 
   getOrCreateConversation, 
@@ -26,6 +26,7 @@ export default function AgentMessagesScreen() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
   const [conversationIdState, setConversationIdState] = useState<string | null>(null);
   const [chattableUsers, setChattableUsers] = useState<Array<{userId: string; name: string; photo?: string; role: string}>>([]);
   const [showUsersList, setShowUsersList] = useState(false);
@@ -124,16 +125,19 @@ export default function AgentMessagesScreen() {
   }, [messages]);
 
   const handleSendMessage = async () => {
-    if (!input.trim() || !conversationIdState) return;
+    if (sending || !input.trim() || !conversationIdState) return;
+    const message = input.trim();
+    setSending(true);
+    setInput('');
+    Keyboard.dismiss();
 
     try {
-      await sendMessage(conversationIdState, input.trim());
-      setInput('');
-      
-      // Mark messages as read after sending
+      await sendMessage(conversationIdState, message);
       await markMessagesAsRead(conversationIdState);
     } catch (error: any) {
       console.error('Error sending message:', error);
+    } finally {
+      setSending(false);
     }
   };
 
@@ -177,7 +181,7 @@ export default function AgentMessagesScreen() {
                   onPress={async () => {
                     try {
                       const adminId = await findAdminUserId();
-                      if (!adminId) { Alert.alert('No admin found'); return; }
+                      if (!adminId) { Alert.alert(i18n.t('noAdminFound') || 'No admin found'); return; }
                       const convId = await getOrCreateConversation(adminId);
                       router.push({ pathname: '/agent-messages', params: { conversationId: convId, otherUserId: adminId, name: 'Admin' } });
                     } catch (err) { console.error(err); }
@@ -185,7 +189,7 @@ export default function AgentMessagesScreen() {
                 >
                   <View style={styles.textAdminBtn}>
                     <Ionicons name="chatbubble-ellipses-outline" size={16} color="#fff" style={{marginRight: 6}} />
-                    <Text style={styles.textAdminText}>Text Admin</Text>
+                    <Text style={styles.textAdminText}>{i18n.t('textAdmin') || 'Text Admin'}</Text>
                   </View>
                 </TouchableOpacity>
                 
@@ -217,17 +221,36 @@ export default function AgentMessagesScreen() {
           renderItem={({ item }) => {
             const currentUserId = auth.currentUser?.uid;
             const isSent = item.senderId === currentUserId;
+            const timeLabel = item.createdAt?.toDate
+              ? new Date(item.createdAt.toDate()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+              : '';
             return (
-              <View style={[
-                styles.bubble,
-                isSent ? styles.agentBubble : styles.playerBubble,
-              ]}>
-                <Text style={[
-                  styles.bubbleText,
-                  isSent ? styles.agentBubbleText : styles.playerBubbleText
+              <View style={[styles.messageRow, isSent ? styles.messageRowSent : styles.messageRowReceived]}>
+                {!isSent && (
+                  item.senderPhoto ? (
+                    <Image source={{ uri: item.senderPhoto }} style={styles.messageAvatarImage} />
+                  ) : (
+                    <View style={styles.messageAvatar}>
+                      <Ionicons name="person" size={16} color="#444444" />
+                    </View>
+                  )
+                )}
+                <View style={[
+                  styles.bubble,
+                  isSent ? styles.agentBubble : styles.playerBubble,
                 ]}>
-                  {item.content || (item.mediaUrl ? 'Media' : '')}
-                </Text>
+                  <Text style={[
+                    styles.bubbleText,
+                    isSent ? styles.agentBubbleText : styles.playerBubbleText
+                  ]}>
+                    {item.content || (item.mediaUrl ? 'Media' : '')}
+                  </Text>
+                  {!!timeLabel && (
+                    <Text style={isSent ? styles.messageMetaSent : styles.messageMetaReceived}>
+                      {timeLabel}{isSent ? ` • ${item.isRead ? (i18n.t('messageSeen') || 'Seen') : (i18n.t('messageSent') || 'Sent')}` : ''}
+                    </Text>
+                  )}
+                </View>
               </View>
             );
           }}
@@ -250,14 +273,16 @@ export default function AgentMessagesScreen() {
           onChangeText={setInput}
           placeholder={i18n.t('typeMessage') || 'Type a message...'}
               placeholderTextColor="#999"
+          editable={!sending}
           onSubmitEditing={() => handleSendMessage()}
+          blurOnSubmit={true}
           returnKeyType="send"
         />
             <TouchableOpacity 
-              style={styles.sendBtn} 
+              style={[styles.sendBtn, (loading || !conversationIdState || sending || !input.trim()) && styles.sendBtnDisabled]} 
               onPress={handleSendMessage} 
               activeOpacity={0.8}
-              disabled={loading || !conversationIdState}
+              disabled={loading || !conversationIdState || sending || !input.trim()}
             >
               <Ionicons name="send" size={20} color="#fff" />
         </TouchableOpacity>
@@ -273,7 +298,7 @@ export default function AgentMessagesScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>All Users</Text>
+              <Text style={styles.modalTitle}>{i18n.t('allUsers') || 'All Users'}</Text>
               <TouchableOpacity onPress={() => setShowUsersList(false)}>
                 <Ionicons name="close" size={28} color="#000" />
               </TouchableOpacity>
@@ -392,27 +417,57 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 16,
     paddingBottom: 100,
+    flexGrow: 1,
+  },
+  messageRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    marginBottom: 8,
+  },
+  messageRowSent: {
+    justifyContent: 'flex-end',
+  },
+  messageRowReceived: {
+    justifyContent: 'flex-start',
+  },
+  messageAvatar: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#e5e5e5',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 8,
+    marginBottom: 8,
+  },
+  messageAvatarImage: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    marginRight: 8,
+    marginBottom: 8,
   },
   bubble: {
-    maxWidth: '75%',
-    borderRadius: 18,
+    maxWidth: '76%',
+    borderRadius: 20,
     paddingVertical: 12,
-    paddingHorizontal: 16,
-    marginBottom: 10,
-    shadowColor: '#000',
+    paddingHorizontal: 14,
+    shadowColor: '#000000',
     shadowOpacity: 0.06,
-    shadowRadius: 4,
+    shadowRadius: 8,
     elevation: 2,
   },
   agentBubble: {
-    backgroundColor: '#000',
+    backgroundColor: '#000000',
     alignSelf: 'flex-end',
-    borderTopRightRadius: 4,
+    borderTopRightRadius: 6,
   },
   playerBubble: {
     backgroundColor: '#fff',
     alignSelf: 'flex-start',
-    borderTopLeftRadius: 4,
+    borderTopLeftRadius: 6,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
   },
   bubbleText: {
     fontSize: 16,
@@ -428,29 +483,46 @@ const styles = StyleSheet.create({
   inputBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
     paddingVertical: 12,
-    backgroundColor: 'rgba(0, 0, 0, 0.3)',
+    backgroundColor: 'rgba(255,255,255,0.98)',
     borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 255, 255, 0.1)',
+    borderTopColor: '#dcdcdc',
   },
   input: {
     flex: 1,
-    backgroundColor: '#fff',
-    borderRadius: 20,
+    backgroundColor: '#f5f5f5',
+    borderRadius: 24,
     paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingVertical: 14,
     fontSize: 16,
     color: '#000',
-    marginRight: 8,
+    marginRight: 10,
+    borderWidth: 1,
+    borderColor: '#d9d9d9',
   },
   sendBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#000',
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#000000',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  sendBtnDisabled: {
+    opacity: 0.55,
+  },
+  messageMetaSent: {
+    marginTop: 6,
+    color: 'rgba(255,255,255,0.75)',
+    fontSize: 11,
+    textAlign: 'right',
+  },
+  messageMetaReceived: {
+    marginTop: 6,
+    color: '#6b7280',
+    fontSize: 11,
+    textAlign: 'left',
   },
   modalOverlay: {
     flex: 1,
@@ -526,3 +598,4 @@ const styles = StyleSheet.create({
     textTransform: 'capitalize',
   },
 });
+

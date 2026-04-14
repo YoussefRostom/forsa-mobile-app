@@ -8,6 +8,7 @@ import i18n from '../locales/i18n';
 import { auth, db } from '../lib/firebase';
 import { doc, getDoc, collection, addDoc } from 'firebase/firestore';
 import { notifyProviderAndAdmins, createNotification } from '../services/NotificationService';
+import { upsertBookingTransaction } from '../services/MonetizationService';
 
 export default function ParentClinicDetailsScreen() {
   const params = useLocalSearchParams();
@@ -22,6 +23,7 @@ export default function ParentClinicDetailsScreen() {
   const [selectedShift, setSelectedShift] = useState<'Day' | 'Night' | null>(null);
   const [showTimePicker, setShowTimePicker] = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const cityLabels = i18n.t('cities', { returnObjects: true }) as Record<string, string>;
 
   const hideDatePicker = () => {
     setShowTimePicker(false);
@@ -102,12 +104,19 @@ export default function ParentClinicDetailsScreen() {
 
         setClinic({
           id: docSnap.id,
-          name: data.clinicName,
-          city: data.city,
-          address: data.address,
-          email: data.email,
-          phone: data.phone,
-          desc: data.description,
+          name: data.clinicName || data.name || 'Clinic',
+          city: data.city || '',
+          district: data.district || '',
+          address: data.address || '',
+          email: data.email || null,
+          phone: data.phone || '',
+          desc: data.description || '',
+          socialUrl: data.socialUrl || data.instagramUrl || data.facebookUrl || null,
+          mapUrl: data.mapUrl || null,
+          latitude: data.latitude ?? data.coordinates?.latitude ?? null,
+          longitude: data.longitude ?? data.coordinates?.longitude ?? null,
+          coordinates: data.coordinates || null,
+          locations: Array.isArray(data.locations) ? data.locations : [],
           services: servicesList,
           workingHours: workingHoursList,
           doctors: Array.from(doctorNames)
@@ -151,6 +160,115 @@ export default function ParentClinicDetailsScreen() {
     } else {
       Alert.alert(i18n.t('error'), 'No phone number available');
     }
+  };
+
+  const openExternalLink = async (url: string) => {
+    if (!url) return;
+    const isAbsoluteUrl = /^(https?:\/\/|geo:|maps:|comgooglemaps:\/\/)/i.test(url);
+    const fullUrl = isAbsoluteUrl ? url : `https://${url}`;
+    const canOpen = await Linking.canOpenURL(fullUrl);
+    if (canOpen) {
+      await Linking.openURL(fullUrl);
+    } else {
+      Alert.alert(i18n.t('error') || 'Error', i18n.t('invalidUrl') || 'Cannot open this link.');
+    }
+  };
+
+  const getCityLabel = (city?: string) => {
+    if (!city) return '';
+    return cityLabels?.[city] || city;
+  };
+
+  const getClinicCoordinates = (target: any) => {
+    const latitude = target?.coordinates?.latitude ?? target?.latitude;
+    const longitude = target?.coordinates?.longitude ?? target?.longitude;
+    return {
+      latitude: typeof latitude === 'number' && Number.isFinite(latitude) ? latitude : null,
+      longitude: typeof longitude === 'number' && Number.isFinite(longitude) ? longitude : null,
+    };
+  };
+
+  const buildMapQuery = (target: any) => {
+    return [target?.name, target?.address, target?.district, target?.city]
+      .filter(Boolean)
+      .join(', ');
+  };
+
+  const buildLocationTarget = (location?: any) => {
+    if (!clinic) return null;
+
+    const latitude = location?.latitude;
+    const longitude = location?.longitude;
+
+    return {
+      ...clinic,
+      city: location?.city || clinic.city,
+      district: location?.district || clinic.district,
+      address: location?.address || clinic.address,
+      mapUrl: location?.mapUrl || clinic.mapUrl,
+      latitude: typeof latitude === 'number' && Number.isFinite(latitude) ? latitude : clinic.latitude ?? null,
+      longitude: typeof longitude === 'number' && Number.isFinite(longitude) ? longitude : clinic.longitude ?? null,
+      coordinates:
+        typeof latitude === 'number' && Number.isFinite(latitude) && typeof longitude === 'number' && Number.isFinite(longitude)
+          ? { latitude, longitude }
+          : clinic.coordinates || null,
+    };
+  };
+
+  const buildMapsUrl = (target: any, directions = false) => {
+    if (!target) return '';
+    if (target.mapUrl) return target.mapUrl;
+
+    const { latitude, longitude } = getClinicCoordinates(target);
+    if (latitude !== null && longitude !== null) {
+      return directions
+        ? `https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}`
+        : `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
+    }
+
+    const query = buildMapQuery(target);
+    if (!query) return '';
+
+    return directions
+      ? `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(query)}`
+      : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+  };
+
+  const handleViewOnMap = (target: any = clinic) => {
+    if (!target) return;
+
+    const { latitude, longitude } = getClinicCoordinates(target);
+    const hasCoordinates = latitude !== null && longitude !== null;
+    const query = buildMapQuery(target);
+
+    if (!hasCoordinates && !query && !target.mapUrl) {
+      Alert.alert(i18n.t('error') || 'Error', i18n.t('mapNotAvailable') || 'Map location is not available yet.');
+      return;
+    }
+
+    const params: Record<string, string> = {
+      title: target.name || clinic?.name || '',
+      address: target.address || '',
+      city: target.city || '',
+      district: target.district || '',
+      mapUrl: target.mapUrl || '',
+    };
+
+    if (hasCoordinates) {
+      params.latitude = String(latitude);
+      params.longitude = String(longitude);
+    }
+
+    router.push({ pathname: '/parent-map-view', params });
+  };
+
+  const handleOpenInMaps = async (target: any = clinic) => {
+    const url = buildMapsUrl(target, true);
+    if (!url) {
+      Alert.alert(i18n.t('error') || 'Error', i18n.t('mapNotAvailable') || 'Map location is not available yet.');
+      return;
+    }
+    await openExternalLink(url);
   };
 
   const handleReserve = async (doctor?: string) => {
@@ -201,6 +319,7 @@ export default function ParentClinicDetailsScreen() {
       };
 
       const bookingRef = await addDoc(collection(db, 'bookings'), bookingData);
+      await upsertBookingTransaction(bookingRef.id, bookingData, user.uid, 'Parent clinic booking created');
       const providerId = clinic.id;
       try {
         await notifyProviderAndAdmins(
@@ -234,6 +353,10 @@ export default function ParentClinicDetailsScreen() {
       setBookingLoading(false);
     }
   };
+
+  const reviewService = clinic?.services?.[selectedServiceIndex] || null;
+  const reviewDoctor = clinic?.doctors?.[selectedDoctorIndex] || (i18n.t('noSpecificDoctor') || 'No specific doctor');
+  const reviewPrice = reviewService ? Number(reviewService.fee) || 0 : 0;
 
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -277,9 +400,21 @@ export default function ParentClinicDetailsScreen() {
                 </View>
                 <View style={styles.detailContent}>
                   <Text style={styles.detailLabel}>{i18n.t('city')}</Text>
-                  <Text style={styles.detailValue}>{clinic.city}</Text>
+                  <Text style={styles.detailValue}>{getCityLabel(clinic.city)}</Text>
                 </View>
               </View>
+
+              {clinic.district && (
+                <View style={styles.detailRow}>
+                  <View style={styles.detailIcon}>
+                    <Ionicons name="location-outline" size={20} color="#000" />
+                  </View>
+                  <View style={styles.detailContent}>
+                    <Text style={styles.detailLabel}>{i18n.t('district') || 'District'}</Text>
+                    <Text style={styles.detailValue}>{clinic.district}</Text>
+                  </View>
+                </View>
+              )}
 
               {/* Services with Individual Pricing */}
               <View style={styles.detailRow}>
@@ -313,9 +448,69 @@ export default function ParentClinicDetailsScreen() {
                 </View>
                 <View style={styles.detailContent}>
                   <Text style={styles.detailLabel}>{i18n.t('address') || 'Address'}</Text>
-                  <Text style={styles.detailValue}>{clinic.address}</Text>
+                  <Text style={styles.detailValue}>{clinic.address || [clinic.district, getCityLabel(clinic.city)].filter(Boolean).join(', ')}</Text>
                 </View>
               </View>
+
+              {!(Array.isArray(clinic.locations) && clinic.locations.length > 1) ? (
+                <View style={styles.mapActionsRow}>
+                  <TouchableOpacity style={styles.mapActionButton} onPress={handleViewOnMap}>
+                    <Ionicons name="map-outline" size={18} color="#000" />
+                    <Text style={styles.mapActionButtonText}>{i18n.t('viewOnMap') || 'View on map'}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[styles.mapActionButton, styles.mapActionButtonPrimary]} onPress={handleOpenInMaps}>
+                    <Ionicons name="navigate-outline" size={18} color="#fff" />
+                    <Text style={styles.mapActionButtonPrimaryText}>{i18n.t('openInMaps') || 'Open in Maps'}</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+
+              {Array.isArray(clinic.locations) && clinic.locations.length > 1 ? (
+                <View style={styles.locationsList}>
+                  {clinic.locations.map((location: any, index: number) => {
+                    const branchTarget = buildLocationTarget(location);
+                    return (
+                      <View key={`${location.label || 'location'}-${index}`} style={styles.locationItemCard}>
+                        <View style={styles.locationItemTopRow}>
+                          <Text style={styles.locationItemTitle}>
+                            {location.label || `${i18n.t('locationLabel') || 'Location'} ${index + 1}`}
+                          </Text>
+                          {index === 0 ? (
+                            <View style={styles.primaryBranchBadge}>
+                              <Text style={styles.primaryBranchBadgeText}>{i18n.t('mainLocationLabel') || 'Main location'}</Text>
+                            </View>
+                          ) : null}
+                        </View>
+                        <Text style={styles.locationItemText}>
+                          {[location.address, location.district, getCityLabel(location.city)].filter(Boolean).join(', ')}
+                        </Text>
+                        <View style={styles.locationCardActions}>
+                          <TouchableOpacity style={styles.locationCardActionButton} onPress={() => handleViewOnMap(branchTarget)}>
+                            <Ionicons name="map-outline" size={16} color="#000" />
+                            <Text style={styles.locationCardActionText}>{i18n.t('viewOnMap') || 'View on map'}</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity style={[styles.locationCardActionButton, styles.locationCardActionPrimary]} onPress={() => handleOpenInMaps(branchTarget)}>
+                            <Ionicons name="navigate-outline" size={16} color="#fff" />
+                            <Text style={styles.locationCardActionPrimaryText}>{i18n.t('openInMaps') || 'Open in Maps'}</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
+              ) : null}
+
+              {clinic.phone ? (
+                <View style={styles.detailRow}>
+                  <View style={styles.detailIcon}>
+                    <Ionicons name="call" size={20} color="#000" />
+                  </View>
+                  <View style={styles.detailContent}>
+                    <Text style={styles.detailLabel}>{i18n.t('phone') || 'Phone'}</Text>
+                    <Text style={styles.detailValue}>{clinic.phone}</Text>
+                  </View>
+                </View>
+              ) : null}
 
               <View style={styles.detailRow}>
                 <View style={styles.detailIcon}>
@@ -326,6 +521,18 @@ export default function ParentClinicDetailsScreen() {
                   <Text style={styles.detailValue}>{clinic.email || 'N/A'}</Text>
                 </View>
               </View>
+
+              {clinic.socialUrl ? (
+                <TouchableOpacity style={styles.detailRow} onPress={() => openExternalLink(clinic.socialUrl)}>
+                  <View style={styles.detailIcon}>
+                    <Ionicons name="link-outline" size={20} color="#000" />
+                  </View>
+                  <View style={styles.detailContent}>
+                    <Text style={styles.detailLabel}>{i18n.t('social_url') || 'Website / Social URL'}</Text>
+                    <Text style={styles.detailValue}>{clinic.socialUrl}</Text>
+                  </View>
+                </TouchableOpacity>
+              ) : null}
             </View>
 
             <View style={styles.hoursCard}>
@@ -436,6 +643,16 @@ export default function ParentClinicDetailsScreen() {
                 numberOfLines={3}
               />
 
+              <View style={styles.bookingSummaryCard}>
+                <Text style={styles.bookingSummaryTitle}>{i18n.t('reviewBooking') || 'Review Before Sending'}</Text>
+                <Text style={styles.bookingSummaryText}>{i18n.t('clinicNameLabel') || 'Clinic'}: {clinic.name}</Text>
+                <Text style={styles.bookingSummaryText}>{i18n.t('service') || 'Service'}: {reviewService?.name || (i18n.t('notSelectedYet') || 'Not selected yet')}</Text>
+                <Text style={styles.bookingSummaryText}>{i18n.t('doctor') || 'Doctor'}: {reviewDoctor}</Text>
+                <Text style={styles.bookingSummaryText}>{i18n.t('preferredDateTime') || 'Preferred Date & Time'}: {preferredTime ? preferredTime.toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : (i18n.t('notSelectedYet') || 'Not selected yet')}</Text>
+                <Text style={styles.bookingSummaryText}>{i18n.t('shiftPreference') || 'Shift Preference'}: {selectedShift ? (selectedShift === 'Day' ? (i18n.t('dayShift') || 'Before 3PM') : (i18n.t('nightShift') || 'After 3PM')) : (i18n.t('notSelectedYet') || 'Not selected yet')}</Text>
+                <Text style={styles.bookingSummaryText}>{i18n.t('fee') || 'Fee'}: {reviewPrice ? `${reviewPrice} EGP` : '—'}</Text>
+              </View>
+
               <TouchableOpacity
                 style={[styles.reserveButton, (bookingLoading || !selectedShift || !preferredTime) && styles.reserveButtonDisabled]}
                 onPress={() => handleReserve()}
@@ -445,7 +662,7 @@ export default function ParentClinicDetailsScreen() {
                 {bookingLoading ? (
                   <ActivityIndicator size="small" color="#fff" />
                 ) : (
-                  <Text style={styles.reserveButtonText}>{i18n.t('reserve') || 'Reserve'}</Text>
+                  <Text style={styles.reserveButtonText}>{i18n.t('reserve') || 'Send Booking Request'}</Text>
                 )}
               </TouchableOpacity>
             </View>
@@ -684,6 +901,103 @@ const styles = StyleSheet.create({
     color: '#000',
     marginLeft: 12,
   },
+  mapActionsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginTop: -4,
+    marginBottom: 18,
+  },
+  mapActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#f3f4f6',
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+  },
+  mapActionButtonPrimary: {
+    backgroundColor: '#000',
+  },
+  mapActionButtonText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#000',
+  },
+  mapActionButtonPrimaryText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  locationsList: {
+    gap: 8,
+    marginTop: 12,
+  },
+  locationItemCard: {
+    backgroundColor: '#f9fafb',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  locationItemTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 4,
+  },
+  locationItemText: {
+    fontSize: 13,
+    color: '#4b5563',
+    lineHeight: 18,
+  },
+  locationItemTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginBottom: 6,
+  },
+  primaryBranchBadge: {
+    backgroundColor: '#111827',
+    borderRadius: 999,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+  },
+  primaryBranchBadgeText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  locationCardActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 10,
+  },
+  locationCardActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#eef2f7',
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+  },
+  locationCardActionPrimary: {
+    backgroundColor: '#000',
+  },
+  locationCardActionText: {
+    color: '#000',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  locationCardActionPrimaryText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
   bookingCard: {
     backgroundColor: '#fff',
     borderRadius: 24,
@@ -735,11 +1049,48 @@ const styles = StyleSheet.create({
   timeText: { fontSize: 15, color: '#000', flex: 1 },
   timePlaceholder: { color: '#999' },
   commentsInput: { borderWidth: 1, borderColor: '#ddd', borderRadius: 12, padding: 12, fontSize: 15, color: '#000', minHeight: 80, textAlignVertical: 'top' },
+  bookingSummaryCard: {
+    marginTop: 14,
+    padding: 14,
+    borderRadius: 12,
+    backgroundColor: '#f9fafb',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  bookingSummaryTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#000',
+    marginBottom: 8,
+  },
+  bookingSummaryText: {
+    fontSize: 14,
+    color: '#374151',
+    marginBottom: 4,
+    lineHeight: 19,
+  },
   reserveButton: {
     backgroundColor: '#000',
     borderRadius: 14,
     paddingVertical: 16,
     marginTop: 20,
+  },
+  profileButton: {
+    backgroundColor: '#3b82f6',
+    borderRadius: 14,
+    paddingVertical: 16,
+    marginTop: 20,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  profileButtonIcon: {
+    marginRight: 10,
+  },
+  profileButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
   },
   reserveButtonDisabled: {
     opacity: 0.6,

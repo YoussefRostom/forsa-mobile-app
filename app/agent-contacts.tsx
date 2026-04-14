@@ -9,6 +9,7 @@ import i18n from '../locales/i18n';
 import { subscribeToConversations, Conversation } from '../services/MessagingService';
 import { getChattableUsers, startConversationWithUser } from '../services/BookingMessagingService';
 import { Alert } from 'react-native';
+import { auth } from '../lib/firebase';
 
 export default function AgentContactsScreen() {
   const router = useRouter();
@@ -18,6 +19,8 @@ export default function AgentContactsScreen() {
   const [chattableUsers, setChattableUsers] = useState<Array<{userId: string; name: string; photo?: string; role: string}>>([]);
   const [loading, setLoading] = useState(true);
   const [loadingChattable, setLoadingChattable] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   React.useEffect(() => {
     Animated.timing(fadeAnim, {
@@ -30,17 +33,26 @@ export default function AgentContactsScreen() {
 
   useEffect(() => {
     setLoading(true);
-    const unsubscribe = subscribeToConversations((convs) => {
-      setConversations(convs);
+    setErrorMessage(null);
+
+    let unsubscribe = () => {};
+    try {
+      unsubscribe = subscribeToConversations((convs) => {
+        setConversations(convs);
+        setLoading(false);
+      });
+    } catch (error: any) {
+      setConversations([]);
       setLoading(false);
-    });
+      setErrorMessage(error?.message || (i18n.t('failedToLoadConversations') || 'Failed to load conversations.'));
+    }
 
     loadChattableUsers();
 
     return () => {
       unsubscribe();
     };
-  }, []);
+  }, [refreshKey]);
 
   const loadChattableUsers = async () => {
     try {
@@ -49,9 +61,14 @@ export default function AgentContactsScreen() {
       setChattableUsers(users);
     } catch (error) {
       console.error('Error loading chattable users:', error);
+      setErrorMessage(i18n.t('failedToLoadContacts') || 'Failed to load contacts. Please try again.');
     } finally {
       setLoadingChattable(false);
     }
+  };
+
+  const handleRetry = () => {
+    setRefreshKey((prev) => prev + 1);
   };
 
   const handleStartChat = async (userId: string, name: string) => {
@@ -74,7 +91,7 @@ export default function AgentContactsScreen() {
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <LinearGradient
-        colors={['#000000', '#1a1a1a', '#2d2d2d']}
+        colors={['#0f172a', '#111827', '#1f2937']}
         style={styles.gradient}
       >
         <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
@@ -102,8 +119,13 @@ export default function AgentContactsScreen() {
           keyExtractor={item => item.id}
           renderItem={({ item }) => {
             const displayName = item.otherParticipantName || 'Unknown';
-            const lastMsg = item.lastMessage || '';
             const unreadCount = item.unreadCount || 0;
+            const lastMsg = item.lastMessage
+              ? `${item.lastMessageSenderId === auth.currentUser?.uid ? `${i18n.t('you') || 'You'}: ` : ''}${item.lastMessage}`
+              : '';
+            const lastMsgTime = item.lastMessageAt?.toDate?.()
+              ? new Date(item.lastMessageAt.toDate()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+              : '';
             
             return (
               <TouchableOpacity
@@ -131,8 +153,16 @@ export default function AgentContactsScreen() {
                   )}
                 </View>
                 <View style={styles.contactInfo}>
-                  <Text style={styles.contactName}>{displayName}</Text>
-                  <Text style={styles.lastMessage} numberOfLines={1}>{lastMsg || 'No messages yet'}</Text>
+                  <View style={styles.contactHeader}>
+                    <View style={styles.nameBlock}>
+                      <Text style={styles.contactName}>{displayName}</Text>
+                      {!!item.otherParticipantRole && (
+                        <Text style={styles.contactRole}>{String(item.otherParticipantRole).replace(/_/g, ' ')}</Text>
+                      )}
+                    </View>
+                    {!!lastMsgTime && <Text style={styles.lastMessageTime}>{lastMsgTime}</Text>}
+                  </View>
+                  <Text style={[styles.lastMessage, unreadCount > 0 && styles.lastMessageUnread]} numberOfLines={1}>{lastMsg || 'No messages yet'}</Text>
                 </View>
                 <Ionicons name="chevron-forward" size={20} color="#999" />
               </TouchableOpacity>
@@ -142,15 +172,21 @@ export default function AgentContactsScreen() {
           showsVerticalScrollIndicator={false}
             ListEmptyComponent={
               <View style={styles.emptyState}>
-                <Ionicons name="chatbubbles-outline" size={64} color="#666" />
-                <Text style={styles.emptyText}>{i18n.t('noMessages') || 'No messages'}</Text>
-                <Text style={styles.emptySubtext}>{i18n.t('startChatting') || 'Start chatting with your players!'}</Text>
-                
+                <Ionicons name={errorMessage ? 'alert-circle-outline' : 'chatbubbles-outline'} size={64} color="#666" />
+                <Text style={styles.emptyText}>{errorMessage || (i18n.t('noMessages') || 'No messages')}</Text>
+                <Text style={styles.emptySubtext}>{errorMessage ? (i18n.t('tapToRetry') || 'Tap retry to try again.') : (i18n.t('startChatting') || 'Start chatting with your players!')}</Text>
+
+                {!!errorMessage && (
+                  <TouchableOpacity style={styles.viewBookingsButton} onPress={handleRetry} activeOpacity={0.8}>
+                    <Text style={styles.viewBookingsButtonText}>{i18n.t('retry') || 'Retry'}</Text>
+                  </TouchableOpacity>
+                )}
+
                 {loadingChattable ? (
                   <ActivityIndicator size="small" color="#fff" style={{ marginTop: 20 }} />
                 ) : chattableUsers.length > 0 ? (
                   <View style={styles.chattableUsersContainer}>
-                    <Text style={styles.chattableUsersTitle}>Start a conversation:</Text>
+                    <Text style={styles.chattableUsersTitle}>{i18n.t('startConversationLabel') || 'Start a conversation:'}</Text>
                     {chattableUsers.map((user) => (
                       <TouchableOpacity
                         key={user.userId}
@@ -176,7 +212,7 @@ export default function AgentContactsScreen() {
                     onPress={() => router.push('/agent-players')}
                     activeOpacity={0.8}
                   >
-                    <Text style={styles.viewBookingsButtonText}>View My Players</Text>
+                    <Text style={styles.viewBookingsButtonText}>{i18n.t('viewMyPlayers') || 'View My Players'}</Text>
                   </TouchableOpacity>
                 )}
               </View>
@@ -237,25 +273,30 @@ const styles = StyleSheet.create({
   contactCard: {
     backgroundColor: '#fff',
     borderRadius: 20,
-    padding: 16,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
     marginBottom: 12,
     flexDirection: 'row',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    shadowColor: '#111827',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
     elevation: 3,
   },
   avatar: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: '#f0f0f0',
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#f3f4f6',
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 12,
+    marginRight: 14,
     position: 'relative',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
   },
   avatarImage: {
     width: 50,
@@ -284,15 +325,39 @@ const styles = StyleSheet.create({
   contactInfo: {
     flex: 1,
   },
+  contactHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 6,
+  },
+  nameBlock: {
+    flex: 1,
+    paddingRight: 10,
+  },
   contactName: {
     fontSize: 16,
-    fontWeight: 'bold',
-    color: '#000',
-    marginBottom: 4,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  contactRole: {
+    marginTop: 3,
+    fontSize: 11,
+    color: '#6b7280',
+    textTransform: 'capitalize',
+  },
+  lastMessageTime: {
+    fontSize: 12,
+    color: '#9ca3af',
   },
   lastMessage: {
-    fontSize: 14,
-    color: '#666',
+    fontSize: 13,
+    color: '#6b7280',
+    lineHeight: 18,
+  },
+  lastMessageUnread: {
+    color: '#374151',
+    fontWeight: '600',
   },
   emptyState: {
     alignItems: 'center',

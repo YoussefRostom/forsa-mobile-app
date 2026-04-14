@@ -1,74 +1,17 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import { collection, onSnapshot, getFirestore, orderBy, query, where, doc, getDoc, getDocs } from 'firebase/firestore';
-import React, { useRef, useState, useEffect } from 'react';
+import { collection, onSnapshot, getFirestore, orderBy, query, where } from 'firebase/firestore';
+import React, { useRef } from 'react';
 import { ActivityIndicator, Animated, Easing, FlatList, Image, KeyboardAvoidingView, Modal, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Video, ResizeMode } from 'expo-av';
 import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import PostActionsMenu from '../components/PostActionsMenu';
+import ZoomableFeedMedia from '../components/feed/ZoomableFeedMedia';
 import i18n from '../locales/i18n';
 import { db, auth } from '../lib/firebase';
-
-// Helper function to get user name from role-specific collection
-async function getUserName(ownerId: string, ownerRole: string): Promise<string> {
-  try {
-    // Map role to collection name
-    const roleCollectionMap: { [key: string]: string } = {
-      'player': 'players',
-      'parent': 'parents',
-      'academy': 'academies',
-      'clinic': 'clinics',
-      'agent': 'agents'
-    };
-
-    const collectionName = roleCollectionMap[ownerRole] || 'users';
-    
-    // Try role-specific collection first
-    if (collectionName !== 'users') {
-      const roleDocRef = doc(db, collectionName, ownerId);
-      const roleDocSnap = await getDoc(roleDocRef);
-      
-      if (roleDocSnap.exists()) {
-        const data = roleDocSnap.data();
-        // Get name based on role
-        if (ownerRole === 'player') {
-          const firstName = data.firstName || '';
-          const lastName = data.lastName || '';
-          return firstName && lastName ? `${firstName} ${lastName}` : firstName || lastName || 'Unknown';
-        } else if (ownerRole === 'parent') {
-          return data.parentName || data.name || 'Unknown';
-        } else if (ownerRole === 'academy') {
-          return data.academyName || data.name || 'Unknown';
-        } else if (ownerRole === 'clinic') {
-          return data.clinicName || data.name || 'Unknown';
-        } else if (ownerRole === 'agent') {
-          const firstName = data.firstName || '';
-          const lastName = data.lastName || '';
-          return firstName && lastName ? `${firstName} ${lastName}` : firstName || lastName || 'Unknown';
-        }
-      }
-    }
-
-    // Fallback to users collection
-    const userDocRef = doc(db, 'users', ownerId);
-    const userDocSnap = await getDoc(userDocRef);
-    
-    if (userDocSnap.exists()) {
-      const data = userDocSnap.data();
-      if (data.firstName && data.lastName) {
-        return `${data.firstName} ${data.lastName}`;
-      }
-      return data.firstName || data.lastName || data.name || data.parentName || data.academyName || data.clinicName || 'Unknown';
-    }
-
-    return 'Unknown';
-  } catch (error) {
-    console.error('Error fetching user name:', error);
-    return 'Unknown';
-  }
-}
+import { getUserDisplayName } from '../services/AgentDataService';
 
 export default function AgentFeedScreen() {
   const router = useRouter();
@@ -76,6 +19,8 @@ export default function AgentFeedScreen() {
   const [feed, setFeed] = React.useState<any[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [userNames, setUserNames] = React.useState<{ [key: string]: string }>({});
+  const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = React.useState(0);
   const [fullScreenMedia, setFullScreenMedia] = React.useState<{ uri: string; type: 'image' | 'video' } | null>(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const [agentPosts, setAgentPosts] = React.useState<any[]>([]);
@@ -105,7 +50,7 @@ export default function AgentFeedScreen() {
     // Fetch user names for merged posts
     const namePromises = merged.map(async (post: any) => {
       if (post.ownerId && post.ownerRole) {
-        const name = await getUserName(post.ownerId, post.ownerRole);
+        const name = await getUserDisplayName(post.ownerId, post.ownerRole);
         return { key: post.ownerId, name };
       }
       return null;
@@ -133,7 +78,8 @@ export default function AgentFeedScreen() {
 
   React.useEffect(() => {
     setLoading(true);
-    
+    setErrorMessage(null);
+
     // Check if user is authenticated before setting up listener
     const user = auth.currentUser;
     if (!user) {
@@ -160,6 +106,8 @@ export default function AgentFeedScreen() {
       postsRef,
       where('ownerRole', '==', 'admin')
     );
+
+    let fallbackUnsubscribe: (() => void) | null = null;
 
     // Set up real-time listener for agent posts
     const unsubscribe = onSnapshot(
@@ -200,7 +148,6 @@ export default function AgentFeedScreen() {
           orderBy('timestamp', 'desc')
         );
         
-        let fallbackUnsubscribe: (() => void) | null = null;
         fallbackUnsubscribe = onSnapshot(
           fallbackQ,
           async (snapshot) => {
@@ -222,7 +169,7 @@ export default function AgentFeedScreen() {
               const namePromises = posts.map(async (post: any) => {
                 if (post.ownerId && post.ownerRole) {
                   try {
-                    const name = await getUserName(post.ownerId, post.ownerRole);
+                    const name = await getUserDisplayName(post.ownerId, post.ownerRole);
                     return { key: post.ownerId, name };
                   } catch (err) {
                     // Silently handle errors when fetching user names
@@ -251,6 +198,7 @@ export default function AgentFeedScreen() {
               console.error('Agent feed fallback error:', fallbackError);
             }
             setFeed([]);
+            setErrorMessage(i18n.t('failedToLoadFeed') || 'Failed to load feed. Please try again.');
             setLoading(false);
           }
         );
@@ -301,10 +249,15 @@ export default function AgentFeedScreen() {
     // Cleanup listeners on unmount
     return () => {
       unsubscribe();
+      if (fallbackUnsubscribe) fallbackUnsubscribe();
       unsubscribeAdmin();
       clearTimeout(t);
     };
-  }, []);
+  }, [refreshKey]);
+
+  const handleRetry = () => {
+    setRefreshKey((prev) => prev + 1);
+  };
 
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -342,40 +295,50 @@ export default function AgentFeedScreen() {
                     : null;
 
                 const userName = userNames[item.ownerId] || item.author || 'User';
-                const roleLabel = item.ownerRole ? `(${item.ownerRole})` : '';
-                const displayName = `${userName}${roleLabel}`;
+                const role = item.ownerRole || '';
+
+                // Initials from display name
+                const initials = userName.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
+
+                // Role badge colour
+                const roleBadgeColor: Record<string, { bg: string; text: string }> = {
+                  player:  { bg: '#22c55e', text: '#fff' },
+                  admin:   { bg: '#3b82f6', text: '#fff' },
+                  academy: { bg: '#f97316', text: '#fff' },
+                  clinic:  { bg: '#a855f7', text: '#fff' },
+                  agent:   { bg: '#eab308', text: '#000' },
+                };
+                const badge = roleBadgeColor[role] ?? { bg: '#555', text: '#fff' };
+
+                const canViewProfile = !!(item.ownerId && item.ownerRole);
 
                 return (
                   <View style={styles.feedCard}>
-                    <View style={styles.feedHeader}>
-                      <TouchableOpacity 
-                        style={styles.feedAuthorContainer}
-                        onPress={() => {
-                          if (item.ownerId && item.ownerRole) {
-                            router.push({
-                              pathname: '/agent-user-posts',
-                              params: {
-                                ownerId: item.ownerId,
-                                ownerRole: item.ownerRole,
-                                userName: userName
-                              }
-                            });
-                          }
-                        }}
-                        activeOpacity={0.7}
+                    {/* Author strip */}
+                    <View style={styles.cardStrip}>
+                      <TouchableOpacity
+                        style={styles.stripLeft}
+                        activeOpacity={0.75}
+                        onPress={() => canViewProfile && router.push({
+                          pathname: '/agent-user-posts',
+                          params: { ownerId: item.ownerId, ownerRole: item.ownerRole, userName }
+                        })}
                       >
-                        <Ionicons name="person-circle-outline" size={24} color="#000" />
-                        <Text 
-                          style={styles.feedAuthor}
-                          numberOfLines={1}
-                          ellipsizeMode="tail"
-                        >
-                          {displayName}
-                        </Text>
+                        <View style={styles.initialsCircle}>
+                          <Text style={styles.initialsText}>{initials || '?'}</Text>
+                        </View>
+                        <View style={styles.stripNameCol}>
+                          <Text style={styles.stripName} numberOfLines={1}>{userName}</Text>
+                          {!!role && (
+                            <View style={[styles.roleBadge, { backgroundColor: badge.bg }]}>
+                              <Text style={[styles.roleBadgeText, { color: badge.text }]}>{role.toUpperCase()}</Text>
+                            </View>
+                          )}
+                        </View>
                       </TouchableOpacity>
-                      <View style={styles.feedHeaderRight}>
+                      <View style={styles.stripRight}>
                         {timestamp && (
-                          <Text style={styles.feedTime}>
+                          <Text style={styles.stripDate}>
                             {timestamp.toLocaleDateString()}
                           </Text>
                         )}
@@ -390,47 +353,49 @@ export default function AgentFeedScreen() {
                         />
                       </View>
                     </View>
-                    
-                    {/* Media display */}
-                    {item.mediaUrl && (
-                      <View style={styles.mediaContainer}>
-                        {item.mediaType === 'video' ? (
-                          <Video
-                            source={{ uri: item.mediaUrl }}
-                            style={styles.mediaVideo}
-                            useNativeControls
-                            resizeMode={ResizeMode.CONTAIN}
-                            isLooping={false}
-                          />
-                        ) : (
-                          <Image 
-                            source={{ uri: item.mediaUrl }} 
-                            style={styles.mediaImage}
-                            resizeMode="cover"
-                          />
-                        )}
-                        <TouchableOpacity
-                          style={styles.fullScreenButton}
-                          onPress={() => setFullScreenMedia({ uri: item.mediaUrl, type: item.mediaType === 'video' ? 'video' : 'image' })}
-                          activeOpacity={0.7}
-                        >
-                          <Ionicons name="expand" size={24} color="#fff" />
-                        </TouchableOpacity>
-                      </View>
+
+                    {/* Media */}
+                    <ZoomableFeedMedia post={item} />
+
+                    {/* Content */}
+                    {!!item.content && (
+                      <Text style={styles.feedContent}>{item.content}</Text>
                     )}
-                    
-                    <Text style={styles.feedContent}>{item.content || ''}</Text>
+
+                    {/* View profile footer */}
+                    {canViewProfile && (
+                      <TouchableOpacity
+                        style={styles.viewProfileRow}
+                        activeOpacity={0.7}
+                        onPress={() => router.push({
+                          pathname: '/agent-user-posts',
+                          params: { ownerId: item.ownerId, ownerRole: item.ownerRole, userName }
+                        })}
+                      >
+                        <Ionicons name="person-outline" size={14} color="#555" />
+                        <Text style={styles.viewProfileText}>{i18n.t('viewProfile') || 'View Profile'} →</Text>
+                      </TouchableOpacity>
+                    )}
                   </View>
                 );
               }}
           keyExtractor={item => item.id}
               contentContainerStyle={styles.listContent}
               showsVerticalScrollIndicator={false}
+              initialNumToRender={5}
+              maxToRenderPerBatch={6}
+              windowSize={7}
+              removeClippedSubviews={Platform.OS === 'android'}
               ListEmptyComponent={
                 <View style={styles.emptyState}>
-                  <Ionicons name="newspaper-outline" size={64} color="#666" />
-                  <Text style={styles.emptyText}>{i18n.t('noPosts') || 'No posts yet'}</Text>
-                  <Text style={styles.emptySubtext}>{i18n.t('beFirstToPost') || 'Be the first to share something!'}</Text>
+                  <Ionicons name={errorMessage ? 'alert-circle-outline' : 'newspaper-outline'} size={64} color="#666" />
+                  <Text style={styles.emptyText}>{errorMessage || (i18n.t('noPosts') || 'No posts yet')}</Text>
+                  <Text style={styles.emptySubtext}>{errorMessage ? (i18n.t('tapToRetry') || 'Tap retry to try again.') : (i18n.t('beFirstToPost') || 'Be the first to share something!')}</Text>
+                  {!!errorMessage && (
+                    <TouchableOpacity style={styles.retryButton} onPress={handleRetry}>
+                      <Text style={styles.retryButtonText}>{i18n.t('retry') || 'Retry'}</Text>
+                    </TouchableOpacity>
+                  )}
     </View>
               }
             />
@@ -526,55 +491,104 @@ const styles = StyleSheet.create({
   },
   feedCard: {
     backgroundColor: '#fff',
-    borderRadius: 20,
-    padding: 20,
-    marginBottom: 16,
+    borderRadius: 18,
+    marginBottom: 18,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 12,
-    elevation: 5,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.18,
+    shadowRadius: 14,
+    elevation: 6,
+    overflow: 'hidden',
   },
-  feedHeader: {
+  cardStrip: {
+    backgroundColor: '#111',
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-    paddingBottom: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
   },
-  feedHeaderRight: {
+  stripLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    flexShrink: 0,
-  },
-  feedAuthorContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
     flex: 1,
-    flexShrink: 1,
     minWidth: 0,
     marginRight: 8,
   },
-  feedAuthor: {
+  initialsCircle: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 11,
+    flexShrink: 0,
+  },
+  initialsText: {
+    color: '#fff',
+    fontSize: 17,
+    fontWeight: '800',
+  },
+  stripNameCol: {
+    flex: 1,
+    minWidth: 0,
+  },
+  stripName: {
+    color: '#fff',
     fontSize: 16,
-    fontWeight: 'bold',
-    color: '#000',
-    flexShrink: 1,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  roleBadge: {
+    alignSelf: 'flex-start',
+    borderRadius: 6,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  roleBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  stripRight: {
+    alignItems: 'flex-end',
+    flexShrink: 0,
+  },
+  stripDate: {
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.55)',
+    marginBottom: 2,
   },
   feedContent: {
     fontSize: 15,
-    color: '#333',
+    color: '#222',
     lineHeight: 22,
-    marginTop: 12,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 4,
   },
-  feedTime: {
-    fontSize: 12,
-    color: '#999',
+  viewProfileRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#f0f0f0',
+    marginTop: 4,
   },
+  viewProfileText: {
+    fontSize: 13,
+    color: '#555',
+    fontWeight: '600',
+  },
+  // legacy kept for ZoomableFeedMedia compatibility
+  feedHeader: { flexDirection: 'row' },
+  feedHeaderRight: { flexDirection: 'row' },
+  feedAuthorContainer: { flexDirection: 'row' },
+  feedAuthor: { fontSize: 16, fontWeight: 'bold', color: '#000' },
+  feedTime: { fontSize: 12, color: '#999' },
   mediaContainer: {
     width: '100%',
     marginVertical: 12,
@@ -616,6 +630,18 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: 'rgba(255, 255, 255, 0.6)',
     marginTop: 8,
+  },
+  retryButton: {
+    marginTop: 14,
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  retryButtonText: {
+    color: '#000',
+    fontWeight: '700',
+    fontSize: 14,
   },
   fullScreenButton: {
     position: 'absolute',
