@@ -24,3 +24,8 @@ A multi-role mobile application that enables user registration, booking workflow
 2. Install dependencies
 3. Run frontend and backend services
 
+## Key Engineering Decisions
+
+- Designed a multi-role system supporting players, agents, and academies with role-based data flows.
+- Implemented backend workflows to track bookings, check-ins, and payment status.
+- Structured APIs to handle user activity and ensure consistent data management across the system.
