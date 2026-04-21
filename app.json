@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "ForsaEg",
-    "slug": "forsa-eg",
+    "slug": "forsa-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/profile.png",
