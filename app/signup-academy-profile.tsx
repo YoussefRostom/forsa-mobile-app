@@ -8,9 +8,12 @@ import { doc, setDoc, collection, addDoc, serverTimestamp } from 'firebase/fires
 import { auth, db } from '../lib/firebase';
 import { resolveUserDisplayName } from '../lib/userDisplayName';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { writeEmailIndex } from '../lib/emailIndex';
-import { writePhoneIndex } from '../lib/phoneIndex';
+import { writeEmailIndex, lookupEmailIndex } from '../lib/emailIndex';
+import { lookupPhoneIndex, writePhoneIndex } from '../lib/phoneIndex';
 import { normalizePhoneForAuth ,
+  getPhoneIdentityCandidates,
+  formatEgyptPhoneFromLocalInput,
+  getEgyptPhoneLocalPart,
   validateAddress,
   validateCity,
   validateEmail,
@@ -150,6 +153,7 @@ const SignupAcademy = () => {
   const [latitudeInput, setLatitudeInput] = useState((params.latitude as string) || '');
   const [longitudeInput, setLongitudeInput] = useState((params.longitude as string) || '');
   const [locationAutofillLoading, setLocationAutofillLoading] = useState(false);
+  const locationPermissionGrantedRef = useRef<boolean | null>(null);
   const [loading, setLoading] = useState(false);
   const [fees, setFees] = useState<{ [age: string]: string }>(() => {
     try {
@@ -705,9 +709,23 @@ const SignupAcademy = () => {
   const handleUseCurrentLocation = async () => {
     try {
       setLocationAutofillLoading(true);
-      const { status } = await Location.requestForegroundPermissionsAsync();
+      const hasLocationPermission = await (async () => {
+        if (locationPermissionGrantedRef.current === true) return true;
+        const currentPermission = await Location.getForegroundPermissionsAsync();
+        if (currentPermission.granted) {
+          locationPermissionGrantedRef.current = true;
+          return true;
+        }
+        const requestedPermission = await Location.requestForegroundPermissionsAsync();
+        if (requestedPermission.granted) {
+          locationPermissionGrantedRef.current = true;
+          return true;
+        }
+        locationPermissionGrantedRef.current = false;
+        return false;
+      })();
 
-      if (status !== 'granted') {
+      if (!hasLocationPermission) {
         Alert.alert(
           i18n.t('locationPermissionNeeded') || 'Location permission needed',
           i18n.t('locationPermissionMessage') || 'Allow location access to continue.'
@@ -848,6 +866,15 @@ const SignupAcademy = () => {
         email && email.trim().length > 0
           ? email.trim().toLowerCase()
           : `user_${phoneForAuth}@forsa.app`;
+
+      // Prevent duplicates across legacy/raw and canonical phone identities
+      const phoneCandidates = getPhoneIdentityCandidates(phone);
+      for (const candidate of phoneCandidates) {
+        const existingAuth = await lookupPhoneIndex(candidate);
+        if (existingAuth) {
+          throw { code: 'forsa/phone-already-in-use' };
+        }
+      }
 
       const userCredential = await createUserWithEmailAndPassword(auth, authEmail, password);
       const uid = userCredential.user.uid;
@@ -1015,7 +1042,12 @@ const SignupAcademy = () => {
       console.log('[Signup] Error:', err.message);
       let errorMsg = i18n.t('signupFailedMessage');
       if (err.code === 'auth/email-already-in-use') {
-        errorMsg = i18n.t('emailAlreadyRegistered') || 'This email or phone number is already registered. Use a different email or sign in.';
+        // Academy uses real email as Firebase auth email when provided
+        errorMsg = email && email.trim().length > 0
+          ? (i18n.t('emailAlreadyRegistered') || 'This email is already registered')
+          : (i18n.t('phoneAlreadyRegistered') || 'This phone number is already registered. Please use a different number or sign in.');
+      } else if (err.code === 'forsa/phone-already-in-use') {
+        errorMsg = i18n.t('phoneAlreadyRegistered') || 'This phone number is already registered. Please use a different number or sign in.';
       } else if (err.code === 'auth/weak-password') {
         errorMsg = i18n.t('weakPassword') || 'Password is too weak';
       } else if (err.message) {
@@ -1188,12 +1220,17 @@ const SignupAcademy = () => {
                 </Text>
                 <View style={[styles.inputWrapper, missing.phone && styles.inputWrapperError]}>
                   <Ionicons name="call-outline" size={20} color="#999" style={styles.inputIcon} />
+                  <Text style={{ color: '#999', fontSize: 16, fontWeight: '600', marginRight: 8 }}>+2</Text>
                   <TextInput
                     style={styles.input}
-                    value={phone}
-                    onChangeText={t => { setPhone(t); if (missing.phone) setMissing(m => ({ ...m, phone: false })); }}
+                    value={getEgyptPhoneLocalPart(phone)}
+                    onChangeText={t => {
+                      const nextPhone = formatEgyptPhoneFromLocalInput(t);
+                      setPhone(nextPhone);
+                      if (missing.phone) setMissing(m => ({ ...m, phone: false }));
+                    }}
                     keyboardType="phone-pad"
-                    placeholder={i18n.t('phone_placeholder') || i18n.t('phone_ph')}
+                    placeholder="01XXXXXXXXX"
                     placeholderTextColor="#999"
                   />
                 </View>

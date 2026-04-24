@@ -49,6 +49,7 @@ export default function PlayerProfileScreen() {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
+  const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [city, setCity] = useState('');
@@ -68,15 +69,9 @@ export default function PlayerProfileScreen() {
   const accountPhone = auth.currentUser?.phoneNumber?.trim() || '';
   const displayName = [firstName, lastName].filter((item) => item.trim().length > 0).join(' ').trim()
     || (i18n.t('playerRoleLabel') || 'Player');
+  const usernameSummary = `${i18n.t('username') || 'Username'}: ${(username || displayName).trim()}`;
   const visibleEmail = (email || accountEmail || '').trim();
   const visiblePhone = (phone || accountPhone || '').trim();
-  const signInSummary = accountEmail && accountPhone
-    ? `${i18n.t('email') || 'Email'}: ${accountEmail}\n${i18n.t('phone') || 'Phone'}: ${accountPhone}`
-    : accountPhone
-      ? `${i18n.t('signedInWith') || 'Signed in with'} ${accountPhone}`
-      : accountEmail
-        ? `${i18n.t('signedInWith') || 'Signed in with'} ${accountEmail}`
-        : (i18n.t('contactMethodRequired') || 'Add at least one email or phone number.');
   const completionFields = [
     firstName,
     lastName,
@@ -137,6 +132,7 @@ export default function PlayerProfileScreen() {
 
       const nextFirstName = mergedData.firstName || '';
       const nextLastName = mergedData.lastName || '';
+      const nextUsername = mergedData.username || buildPersonDisplayName(nextFirstName, nextLastName);
       const nextEmail = mergedData.email || user.email || '';
       const nextPhone = mergedData.phone || user.phoneNumber || '';
       const nextCity = mergedData.city || '';
@@ -146,6 +142,7 @@ export default function PlayerProfileScreen() {
 
       setFirstName(nextFirstName);
       setLastName(nextLastName);
+      setUsername(nextUsername);
       setEmail(nextEmail);
       setPhone(nextPhone);
       setCity(nextCity);
@@ -276,6 +273,7 @@ export default function PlayerProfileScreen() {
       if (finalProfilePhotoUrl) {
         setProfilePhoto(finalProfilePhotoUrl);
       }
+      setUsername(username);
 
       setInitialProfile(createProfileSnapshot({
         ...updateData,
@@ -345,7 +343,7 @@ export default function PlayerProfileScreen() {
               <View style={styles.overviewHeaderRow}>
                 <View style={styles.overviewTextWrap}>
                   <Text style={styles.profileName}>{displayName}</Text>
-                  <Text style={styles.profileMeta}>{signInSummary}</Text>
+                  <Text style={styles.profileMeta}>{usernameSummary}</Text>
                 </View>
                 <View style={styles.completionBadge}>
                   <Text style={styles.completionBadgeValue}>{profileCompletion}%</Text>

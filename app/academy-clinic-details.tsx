@@ -18,7 +18,6 @@ export default function AcademyClinicDetailsScreen() {
   const [loading, setLoading] = useState(true);
   const [bookingLoading, setBookingLoading] = useState(false);
   const [selectedServiceIndex, setSelectedServiceIndex] = useState(0);
-  const [selectedDoctorIndex, setSelectedDoctorIndex] = useState(0);
   const [bookingComments, setBookingComments] = useState('');
   const [preferredTime, setPreferredTime] = useState<Date | null>(null);
   const [showTimePicker, setShowTimePicker] = useState(false);
@@ -152,16 +151,14 @@ export default function AcademyClinicDetailsScreen() {
     }
   };
 
-  const handleReserve = async (doctor?: string) => {
+  const handleReserve = async () => {
     const user = auth.currentUser;
     if (!user) {
       Alert.alert(i18n.t('error'), i18n.t('loginRequired') || 'You must be logged in to book');
       return;
     }
 
-    const selectedDoctor =
-      doctor ?? (clinic.doctors && clinic.doctors.length > 0 ? clinic.doctors[selectedDoctorIndex] : null);
-    const doctorName = selectedDoctor || (i18n.t('noSpecificDoctor') || 'No specific doctor');
+    const doctorName = i18n.t('noSpecificDoctor') || 'No specific doctor';
     const serviceList = clinic.services && clinic.services.length > 0 ? clinic.services : [];
     const selectedService = serviceList[selectedServiceIndex];
     const serviceName = selectedService ? selectedService.name : (i18n.t('generalService') || 'General');
@@ -204,7 +201,7 @@ export default function AcademyClinicDetailsScreen() {
 
       Alert.alert(
         i18n.t('reservation') || 'Reservation',
-        `${i18n.t('reservationSuccess') || 'Reservation request sent!'}\n${i18n.t('doctor') || 'Doctor'}: ${doctorName}\n${i18n.t('service') || 'Service'}: ${serviceName}`,
+        `${i18n.t('reservationSuccess') || 'Reservation request sent!'}\n${i18n.t('service') || 'Service'}: ${serviceName}`,
         [{ text: i18n.t('ok') || 'OK', onPress: () => router.push('/academy-bookings') }]
       );
     } catch (error) {
@@ -307,22 +304,7 @@ export default function AcademyClinicDetailsScreen() {
               </View>
             </View>
 
-            <View style={styles.hoursCard}>
-              <View style={styles.cardHeader}>
-                <Ionicons name="time" size={24} color="#000" />
-                <Text style={styles.cardTitle}>{i18n.t('workingHours') || 'Working Hours'}</Text>
-              </View>
-              {clinic.workingHours.map((row: any, idx: number) => (
-                <View key={idx} style={styles.hoursRow}>
-                  <Text style={styles.hoursDay}>{row.day}</Text>
-                  <Text style={styles.hoursTime}>
-                    {row.off ? (i18n.t('closed') || 'Closed') : `${row.from} - ${row.to}`}
-                  </Text>
-                </View>
-              ))}
-            </View>
-
-            {/* Book appointment: service, doctor, comments, reserve */}
+            {/* Book appointment: service, comments, reserve */}
             <View style={styles.bookingCard}>
               <View style={styles.cardHeader}>
                 <Ionicons name="calendar" size={24} color="#000" />
@@ -346,24 +328,6 @@ export default function AcademyClinicDetailsScreen() {
                 </View>
               ) : (
                 <Text style={styles.bookingHint}>{i18n.t('noServicesListed') || 'No services listed'}</Text>
-              )}
-
-              <Text style={styles.bookingLabel}>{i18n.t('selectDoctor') || 'Select doctor'}</Text>
-              {clinic.doctors && clinic.doctors.length > 0 ? (
-                <View style={styles.serviceOptions}>
-                  {clinic.doctors.map((docName: string, idx: number) => (
-                    <TouchableOpacity
-                      key={idx}
-                      style={[styles.serviceOption, selectedDoctorIndex === idx && styles.serviceOptionSelected]}
-                      onPress={() => setSelectedDoctorIndex(idx)}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={styles.serviceOptionText}>{docName}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              ) : (
-                <Text style={styles.bookingHint}>{i18n.t('noDoctorsListed') || 'No doctors listed'}</Text>
               )}
 
               <Text style={styles.bookingLabel}>{i18n.t('preferredDateTime') || 'Preferred Date & Time'}</Text>

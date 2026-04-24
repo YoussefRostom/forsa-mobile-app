@@ -8,9 +8,12 @@ import { doc, setDoc } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import { resolveUserDisplayName } from '../lib/userDisplayName';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { writeEmailIndex } from '../lib/emailIndex';
-import { writePhoneIndex } from '../lib/phoneIndex';
+import { writeEmailIndex, lookupEmailIndex } from '../lib/emailIndex';
+import { lookupPhoneIndex, writePhoneIndex } from '../lib/phoneIndex';
 import {
+  getPhoneIdentityCandidates,
+  formatEgyptPhoneFromLocalInput,
+  getEgyptPhoneLocalPart,
   normalizePhoneForAuth,
   validateAddress,
   validateCity,
@@ -164,6 +167,8 @@ const SignupClinic = () => {
   const [longitudeInput, setLongitudeInput] = useState('');
   const [locationAutofillLoading, setLocationAutofillLoading] = useState(false);
   const [extraLocations, setExtraLocations] = useState<ClinicBranchLocation[]>([]);
+  const mediaPermissionGrantedRef = useRef<boolean | null>(null);
+  const locationPermissionGrantedRef = useRef<boolean | null>(null);
   const availableDistricts = city ? districtsByCity[city] || [] : [];
   const isDistrictEnabled = Boolean(city && availableDistricts.length > 0);
 
@@ -763,9 +768,23 @@ const SignupClinic = () => {
   const handleUseCurrentLocation = async () => {
     try {
       setLocationAutofillLoading(true);
-      const { status } = await Location.requestForegroundPermissionsAsync();
+      const hasLocationPermission = await (async () => {
+        if (locationPermissionGrantedRef.current === true) return true;
+        const currentPermission = await Location.getForegroundPermissionsAsync();
+        if (currentPermission.granted) {
+          locationPermissionGrantedRef.current = true;
+          return true;
+        }
+        const requestedPermission = await Location.requestForegroundPermissionsAsync();
+        if (requestedPermission.granted) {
+          locationPermissionGrantedRef.current = true;
+          return true;
+        }
+        locationPermissionGrantedRef.current = false;
+        return false;
+      })();
 
-      if (status !== 'granted') {
+      if (!hasLocationPermission) {
         Alert.alert(
           i18n.t('locationPermissionNeeded') || 'Location permission needed',
           i18n.t('locationPermissionMessage') || 'Allow location access to continue.'
@@ -819,6 +838,23 @@ const SignupClinic = () => {
       const normalizedPhone = normalizePhoneForTwilio(phone);
       const phoneForAuth = normalizePhoneForAuth(normalizedPhone);
       const authEmail = `user_${phoneForAuth}@forsa.app`;
+
+      // Prevent duplicates across legacy/raw and canonical phone identities
+      const phoneCandidates = getPhoneIdentityCandidates(phone);
+      for (const candidate of phoneCandidates) {
+        const existingAuth = await lookupPhoneIndex(candidate);
+        if (existingAuth) {
+          throw { code: 'forsa/phone-already-in-use' };
+        }
+      }
+
+      // Pre-check: if email provided, ensure it is not already taken
+      if (email && email.trim().length > 0) {
+        const existingAuth = await lookupEmailIndex(email.trim());
+        if (existingAuth) {
+          throw { code: 'forsa/email-already-in-use' };
+        }
+      }
 
       const userCredential = await createUserWithEmailAndPassword(auth, authEmail, password);
       const uid = userCredential.user.uid;
@@ -962,7 +998,11 @@ const SignupClinic = () => {
       console.log('[Signup] Error:', err.message);
       let errorMsg = i18n.t('signupFailedMessage');
       if (err.code === 'auth/email-already-in-use') {
-        errorMsg = i18n.t('emailAlreadyRegistered') || 'This phone number is already registered';
+        errorMsg = i18n.t('phoneAlreadyRegistered') || 'This phone number is already registered';
+      } else if (err.code === 'forsa/phone-already-in-use') {
+        errorMsg = i18n.t('phoneAlreadyRegistered') || 'This phone number is already registered';
+      } else if (err.code === 'forsa/email-already-in-use') {
+        errorMsg = i18n.t('emailAlreadyRegistered') || 'This email is already registered';
       } else if (err.code === 'auth/weak-password') {
         errorMsg = i18n.t('weakPassword') || 'Password is too weak';
       } else if (err.message) {
@@ -1001,9 +1041,45 @@ const SignupClinic = () => {
     setCustomServices((prev) => prev.map((s, i) => i === idx ? { ...s, [field]: value } : s));
   };
 
+  const ensureMediaLibraryPermission = async () => {
+    if (mediaPermissionGrantedRef.current === true) {
+      return true;
+    }
+    const currentPermission = await ImagePicker.getMediaLibraryPermissionsAsync();
+    if (currentPermission.granted) {
+      mediaPermissionGrantedRef.current = true;
+      return true;
+    }
+    const requestedPermission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (requestedPermission.granted) {
+      mediaPermissionGrantedRef.current = true;
+      return true;
+    }
+    mediaPermissionGrantedRef.current = false;
+    return false;
+  };
+
+  const pickDoctorPhoto = async (doctorIndex: number) => {
+    const hasMediaPermission = await ensureMediaLibraryPermission();
+    if (!hasMediaPermission) {
+      Alert.alert(i18n.t('permissionDenied') || 'Permission denied', i18n.t('mediaLibraryPermissionRequired') || 'Media library permission is required.');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.7,
+    });
+    if (!result.canceled && result.assets && result.assets.length > 0) {
+      setDoctors(prev => prev.map((d, i) => i === doctorIndex ? { ...d, photoUri: result.assets[0].uri } : d));
+    }
+  };
+
   const pickImage = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
+    const hasMediaPermission = await ensureMediaLibraryPermission();
+    if (!hasMediaPermission) {
       Alert.alert(i18n.t('permissionDenied') || 'Permission denied', i18n.t('mediaLibraryPermissionRequired') || 'Media library permission is required.');
       return;
     }
@@ -1176,12 +1252,17 @@ const SignupClinic = () => {
                 </Text>
                 <View style={[styles.inputWrapper, missing.phone && styles.inputWrapperError]}>
                   <Ionicons name="call-outline" size={20} color="#999" style={styles.inputIcon} />
+                  <Text style={{ color: '#999', fontSize: 16, fontWeight: '600', marginRight: 8 }}>+2</Text>
                   <TextInput
                     style={styles.input}
-                    value={phone}
-                    onChangeText={t => { setPhone(t); if (missing.phone) setMissing(m => ({ ...m, phone: false })); }}
+                    value={getEgyptPhoneLocalPart(phone)}
+                    onChangeText={t => {
+                      const nextPhone = formatEgyptPhoneFromLocalInput(t);
+                      setPhone(nextPhone);
+                      if (missing.phone) setMissing(m => ({ ...m, phone: false }));
+                    }}
                     keyboardType="phone-pad"
-                    placeholder={i18n.t('phone_ph')}
+                    placeholder="01XXXXXXXXX"
                     placeholderTextColor="#999"
                   />
                 </View>
@@ -1920,21 +2001,8 @@ const SignupClinic = () => {
                           </View>
                         )}
                         <TouchableOpacity
-                          onPress={async () => {
-                            const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-                            if (status !== 'granted') {
-                              Alert.alert(i18n.t('permissionDenied') || 'Permission denied', i18n.t('mediaLibraryPermissionRequired') || 'Media library permission is required.');
-                              return;
-                            }
-                            const result = await ImagePicker.launchImageLibraryAsync({
-                              mediaTypes: ImagePicker.MediaTypeOptions.Images,
-                              allowsEditing: true,
-                              aspect: [1, 1],
-                              quality: 0.7,
-                            });
-                            if (!result.canceled && result.assets && result.assets.length > 0) {
-                              setDoctors(prev => prev.map((d, i) => i === idx ? { ...d, photoUri: result.assets[0].uri } : d));
-                            }
+                          onPress={() => {
+                            void pickDoctorPhoto(idx);
                           }}
                           style={{ paddingVertical: 8, paddingHorizontal: 14, backgroundColor: '#f4f4f4', borderRadius: 8 }}
                         >

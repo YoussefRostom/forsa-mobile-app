@@ -43,7 +43,20 @@ const localizeFieldName = (fieldName: string): string => {
  *   the digit sequence is the same, the generated email matches.
  */
 export function normalizePhoneForAuth(phone: string): string {
-  return phone.replace(/\D/g, '');
+  const digits = phone.replace(/\D/g, '');
+  if (!digits) return '';
+
+  // Canonical Egypt identity: 20 + 10 local digits (without leading zero)
+  // 01555551766 -> 201555551766
+  // 201555551766 -> 201555551766
+  if (digits.startsWith('20') && digits.length === 12) {
+    return digits;
+  }
+  if (digits.startsWith('0') && digits.length === 11) {
+    return `20${digits.slice(1)}`;
+  }
+
+  return digits;
 }
 
 /**
@@ -64,6 +77,42 @@ export function normalizePhoneForTwilio(phone: string): string {
   return digits;
 }
 
+export function getPhoneIdentityCandidates(phone: string): string[] {
+  const rawDigits = String(phone || '').replace(/\D/g, '');
+  const canonical = normalizePhoneForAuth(rawDigits);
+  const candidates = new Set<string>();
+
+  if (canonical) candidates.add(canonical);
+  if (rawDigits) candidates.add(rawDigits);
+
+  if (rawDigits.startsWith('0') && rawDigits.length === 11) {
+    candidates.add(`20${rawDigits.slice(1)}`);
+  }
+  if (rawDigits.startsWith('20') && rawDigits.length === 12) {
+    candidates.add(`0${rawDigits.slice(2)}`);
+  }
+
+  return Array.from(candidates).filter(Boolean);
+}
+
+// For Egypt phone UX: keep +2 fixed in UI and let user type local number starting with 0.
+export function getEgyptPhoneLocalPart(phone: string): string {
+  const raw = String(phone || '').replace(/\s/g, '');
+  if (!raw) return '';
+  if (raw.startsWith('+2')) {
+    return raw.slice(2).replace(/\D/g, '').slice(0, 11);
+  }
+  return raw.replace(/\D/g, '').slice(0, 11);
+}
+
+export function formatEgyptPhoneFromLocalInput(localInput: string): string {
+  const digits = String(localInput || '').replace(/\D/g, '').slice(0, 11);
+  if (!digits) return '';
+  const startsWithZero = digits.startsWith('0');
+  const normalizedLocal = (startsWithZero ? digits : `0${digits}`).slice(0, 11);
+  return `+2${normalizedLocal}`;
+}
+
 export const validateEmail = (email: string): string | null => {
   if (!email) {
     return getTranslatedText('validationEmailRequired', 'Email is required');
@@ -79,26 +128,15 @@ export const validatePhone = (phone: string): string | null => {
   if (!phone) {
     return getTranslatedText('validationPhoneRequired', 'Phone number is required');
   }
-  // Remove spaces, dashes, parentheses, and other formatting characters
-  const cleaned = phone.replace(/[\s\-\(\)\.]/g, '');
+  // Strip spaces only (allow +2 prefix as entered)
+  const cleaned = phone.replace(/\s/g, '');
 
-  // Check if it contains only digits and optional + at the start
-  // International phone numbers can start with + (country code)
-  // Minimum 7 digits, maximum 15 digits (ITU-T E.164 standard)
-  const phoneRegex = /^\+?[0-9]{7,15}$/;
+  // Egyptian format: must start with +2 followed by exactly 11 digits
+  // e.g. +201XXXXXXXXX
+  const phoneRegex = /^\+2\d{11}$/;
 
   if (!phoneRegex.test(cleaned)) {
-    // More specific error messages
-    if (cleaned.length < 7) {
-      return getTranslatedText('validationPhoneMin', 'Phone number must be at least 7 digits');
-    }
-    if (cleaned.length > 15) {
-      return getTranslatedText('validationPhoneMax', 'Phone number must be at most 15 digits');
-    }
-    if (!/^\+?[0-9]+$/.test(cleaned)) {
-      return getTranslatedText('validationPhoneFormat', 'Phone number can only contain digits and optional + at the start');
-    }
-    return getTranslatedText('validationValidPhone', 'Please enter a valid phone number');
+    return getTranslatedText('validationPhoneEgyptFormat', 'Phone must start with +2 followed by 11 digits (e.g. +20123456789)');
   }
   return null;
 };

@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as Clipboard from 'expo-clipboard';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Easing, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View, Alert, RefreshControl } from 'react-native';
@@ -286,6 +287,16 @@ export default function PlayerBookingsScreen() {
     }
   };
 
+  const handleCopyBookingId = async (booking: any) => {
+    const publicId = getBookingPublicId(booking);
+    try {
+      await Clipboard.setStringAsync(publicId);
+      Alert.alert(i18n.t('copied') || 'Copied', i18n.t('bookingIdCopied') || 'Booking ID copied to clipboard');
+    } catch {
+      Alert.alert(i18n.t('error') || 'Error', i18n.t('failedToCopy') || 'Failed to copy');
+    }
+  };
+
   const filteredBookings = filter === 'all' 
     ? bookingsWithPending 
     : bookingsWithPending.filter(b => (b.type || b.bookingType) === filter);
@@ -388,9 +399,9 @@ export default function PlayerBookingsScreen() {
 
                   <Text style={styles.bookingName}>{booking.name}</Text>
                   {!booking.__pendingBooking ? (
-                    <View style={styles.bookingIdBadge}>
+                    <TouchableOpacity style={styles.bookingIdBadge} onPress={() => void handleCopyBookingId(booking)} activeOpacity={0.8}>
                       <Text style={styles.bookingIdText}>{i18n.t('bookingId') || 'Booking ID'}: {getBookingPublicId(booking)}</Text>
-                    </View>
+                    </TouchableOpacity>
                   ) : null}
 
                   {booking.__pendingBooking ? (
@@ -696,7 +707,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 12,
+    minHeight: 46,
+    paddingVertical: 14,
     paddingHorizontal: 16,
     borderRadius: 24,
     backgroundColor: 'rgba(255, 255, 255, 0.1)',
@@ -737,9 +749,9 @@ const styles = StyleSheet.create({
   },
   bookingCard: {
     backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 16,
+    borderRadius: 18,
+    padding: 22,
+    marginBottom: 18,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.1)',
   },
@@ -759,19 +771,25 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#fff',
     textTransform: 'uppercase',
+    letterSpacing: 0.4,
   },
   statusBadge: {
     paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    minHeight: 30,
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.35)',
   },
   statusText: {
     fontSize: 12,
-    fontWeight: 'bold',
+    fontWeight: '700',
+    letterSpacing: 0.2,
     color: '#fff',
   },
   bookingName: {
-    fontSize: 20,
+    fontSize: 21,
     fontWeight: 'bold',
     color: '#fff',
     marginBottom: 12,
@@ -879,7 +897,8 @@ const styles = StyleSheet.create({
   },
   bookingDetailText: {
     fontSize: 16,
-    color: 'rgba(255, 255, 255, 0.8)',
+    lineHeight: 22,
+    color: 'rgba(255, 255, 255, 0.88)',
   },
   bookingFooter: {
     flexDirection: 'column',
@@ -899,17 +918,20 @@ const styles = StyleSheet.create({
   },
   bookingDateTimeText: {
     fontSize: 14,
-    color: 'rgba(255, 255, 255, 0.7)',
+    fontWeight: '500',
+    color: 'rgba(255, 255, 255, 0.82)',
   },
   bookingPrice: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: 'bold',
+    letterSpacing: 0.2,
     color: '#fff',
   },
   chatButton: {
     backgroundColor: '#fff',
     borderRadius: 12,
-    paddingVertical: 10,
+    minHeight: 46,
+    paddingVertical: 12,
     paddingHorizontal: 16,
     flexDirection: 'row',
     alignItems: 'center',

@@ -20,9 +20,12 @@ import {
 } from 'react-native';
 import { auth, db } from '../lib/firebase';
 import { resolveUserDisplayName } from '../lib/userDisplayName';
-import { writeEmailIndex } from '../lib/emailIndex';
-import { writePhoneIndex } from '../lib/phoneIndex';
+import { writeEmailIndex, lookupEmailIndex } from '../lib/emailIndex';
+import { lookupPhoneIndex, writePhoneIndex } from '../lib/phoneIndex';
 import {
+  getPhoneIdentityCandidates,
+  formatEgyptPhoneFromLocalInput,
+  getEgyptPhoneLocalPart,
   validateCity,
   validateEmail,
   validateName,
@@ -211,6 +214,23 @@ const SignupParent = () => {
       const authEmail = `user_${phoneForAuth}@forsa.app`;
       const userEmailForIndex = email && email.trim().length > 0 ? email.trim() : null;
 
+      // Prevent duplicates across legacy/raw and canonical phone identities
+      const phoneCandidates = getPhoneIdentityCandidates(phone);
+      for (const candidate of phoneCandidates) {
+        const existingAuth = await lookupPhoneIndex(candidate);
+        if (existingAuth) {
+          throw { code: 'forsa/phone-already-in-use' };
+        }
+      }
+
+      // Pre-check: if email provided, ensure it is not already taken
+      if (userEmailForIndex) {
+        const existingAuth = await lookupEmailIndex(userEmailForIndex);
+        if (existingAuth) {
+          throw { code: 'forsa/email-already-in-use' };
+        }
+      }
+
       // console.log('[Signup] Creating Firebase user with email:', authEmail);
       const userCredential = await createUserWithEmailAndPassword(auth, authEmail, password);
       const user = userCredential.user;
@@ -263,7 +283,11 @@ const SignupParent = () => {
       // console.log('[Signup] Error:', err.message, err);
       let errorMsg = i18n.t('signupFailedMessage');
       if (err.code === 'auth/email-already-in-use') {
-        errorMsg = String(i18n.t('emailAlreadyRegistered'));
+        errorMsg = String(i18n.t('phoneAlreadyRegistered'));
+      } else if (err.code === 'forsa/phone-already-in-use') {
+        errorMsg = i18n.t('phoneAlreadyRegistered') || 'This phone number is already registered';
+      } else if (err.code === 'forsa/email-already-in-use') {
+        errorMsg = i18n.t('emailAlreadyRegistered') || 'This email is already registered';
       } else if (err.code === 'auth/weak-password') {
         errorMsg = i18n.t('weakPassword') || 'Password is too weak';
       } else if (err.message) {
@@ -392,14 +416,20 @@ const SignupParent = () => {
                 </Text>
                 <View style={[styles.inputWrapper, focusedField === 'phone' && styles.inputWrapperFocused, missing.phone && styles.inputWrapperError]}>
                   <Ionicons name="call-outline" size={20} color="#999" style={styles.inputIcon} />
+                  <Text style={{ color: '#999', fontSize: 16, fontWeight: '600', marginRight: 8 }}>+2</Text>
                   <TextInput
                     style={styles.input}
-                    value={phone}
+                    value={getEgyptPhoneLocalPart(phone)}
                     onFocus={() => setFocusedField('phone')}
                     onBlur={() => setFocusedField(null)}
-                    onChangeText={t => { setPhone(t); if (missing.phone) setMissing(m => ({ ...m, phone: false })); validateField('phone', t); }}
+                    onChangeText={t => {
+                      const nextPhone = formatEgyptPhoneFromLocalInput(t);
+                      setPhone(nextPhone);
+                      if (missing.phone) setMissing(m => ({ ...m, phone: false }));
+                      validateField('phone', nextPhone);
+                    }}
                     keyboardType="phone-pad"
-                    placeholder={i18n.t('phone_ph')}
+                    placeholder="01XXXXXXXXX"
                     placeholderTextColor="#999"
                   />
                 </View>

@@ -7,6 +7,7 @@ import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import i18n from '../locales/i18n';
 import { isExpectedNetworkError } from '../lib/networkErrors';
 import { resolveUserDisplayName } from '../lib/userDisplayName';
+import { validatePhone } from '../lib/validations';
 import { auth, db } from '../lib/firebase';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { uploadMedia } from '../services/MediaService';
@@ -108,6 +109,11 @@ export default function ParentEditProfileScreen() {
     // Only require phone number - other fields are optional
     if (!phone || !phone.trim()) {
       Alert.alert(i18n.t('error'), i18n.t('phoneRequired') || 'Phone number is required');
+      return;
+    }
+    const phoneValidationError = validatePhone(phone.trim());
+    if (phoneValidationError) {
+      Alert.alert(i18n.t('error'), phoneValidationError);
       return;
     }
 

@@ -70,6 +70,12 @@ export default function AcademyDetailsScreen() {
   const postsSectionRef = useRef<View | null>(null);
   const cityLabels = i18n.t('cities', { returnObjects: true }) as Record<string, string>;
 
+  const scrollToBookingActions = () => {
+    setTimeout(() => {
+      scrollViewRef.current?.scrollToEnd({ animated: true });
+    }, 150);
+  };
+
   const openExternalLink = async (url: string) => {
     if (!url) return;
     const isAbsoluteUrl = /^(https?:\/\/|geo:|maps:|comgooglemaps:\/\/)/i.test(url);
@@ -318,6 +324,8 @@ export default function AcademyDetailsScreen() {
       Alert.alert(i18n.t('error') || 'Error', i18n.t('selectBranch') || 'Please select a branch');
       return;
     }
+
+    setBookingLoading(true);
 
     const price = academy?.fees[selectedAge] || 0;
 
@@ -878,6 +886,7 @@ export default function AcademyDetailsScreen() {
                         onPress={() => {
                           setSelectedAge(age);
                           setAgeModalVisible(false);
+                          scrollToBookingActions();
                         }}
                       >
                         <View style={styles.modalOptionContent}>

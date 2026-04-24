@@ -27,7 +27,6 @@ export default function ParentClinicDetailsScreen() {
   const [loading, setLoading] = useState(true);
   const [bookingLoading, setBookingLoading] = useState(false);
   const [selectedServiceIndex, setSelectedServiceIndex] = useState(0);
-  const [selectedDoctorIndex, setSelectedDoctorIndex] = useState(0);
   const [selectedBranchId, setSelectedBranchId] = useState('');
   const [bookingComments, setBookingComments] = useState('');
   const [minimumBookingDate] = useState(() => createMinimumBookingDate());
@@ -372,7 +371,7 @@ export default function ParentClinicDetailsScreen() {
     await openExternalLink(url);
   };
 
-  const handleReserve = async (doctor?: string) => {
+  const handleReserve = async () => {
     const user = auth.currentUser;
     if (!user) {
       Alert.alert(i18n.t('error'), i18n.t('loginRequired') || 'You must be logged in to book');
@@ -384,13 +383,13 @@ export default function ParentClinicDetailsScreen() {
       return;
     }
 
-    const selectedDoctor =
-      doctor ?? (clinic.doctors && clinic.doctors.length > 0 ? clinic.doctors[selectedDoctorIndex] : null);
-    const doctorName = selectedDoctor || (i18n.t('noSpecificDoctor') || 'No specific doctor');
+    const doctorName = i18n.t('noSpecificDoctor') || 'No specific doctor';
     const serviceList = clinic.services && clinic.services.length > 0 ? clinic.services : [];
     const selectedService = serviceList[selectedServiceIndex];
     const serviceName = selectedService ? selectedService.name : 'General';
     const servicePrice = selectedService ? Number(selectedService.fee) || 0 : 0;
+
+    setBookingLoading(true);
 
     let parentName = user.displayName || 'Parent';
     try {
@@ -459,7 +458,6 @@ export default function ParentClinicDetailsScreen() {
   };
 
   const reviewService = clinic?.services?.[selectedServiceIndex] || null;
-  const reviewDoctor = clinic?.doctors?.[selectedDoctorIndex] || (i18n.t('noSpecificDoctor') || 'No specific doctor');
   const reviewPrice = reviewService ? Number(reviewService.fee) || 0 : 0;
 
   return (
@@ -639,22 +637,7 @@ export default function ParentClinicDetailsScreen() {
               ) : null}
             </View>
 
-            <View style={styles.hoursCard}>
-              <View style={styles.cardHeader}>
-                <Ionicons name="time" size={24} color="#000" />
-                <Text style={styles.cardTitle}>{i18n.t('workingHours') || 'Working Hours'}</Text>
-              </View>
-              {clinic.workingHours.map((row: any, idx: number) => (
-                <View key={idx} style={styles.hoursRow}>
-                  <Text style={styles.hoursDay}>{row.day}</Text>
-                  <Text style={styles.hoursTime}>
-                    {row.off ? 'Closed' : `${row.from} - ${row.to}`}
-                  </Text>
-                </View>
-              ))}
-            </View>
-
-            {/* Book appointment: service, doctor, comments, reserve */}
+            {/* Book appointment: service, comments, reserve */}
             <View style={styles.bookingCard}>
               <View style={styles.cardHeader}>
                 <Ionicons name="calendar" size={24} color="#000" />
@@ -678,24 +661,6 @@ export default function ParentClinicDetailsScreen() {
                 </View>
               ) : (
                 <Text style={styles.bookingHint}>{i18n.t('noServicesListed') || 'No services listed'}</Text>
-              )}
-
-              <Text style={styles.bookingLabel}>{i18n.t('selectDoctor') || 'Select doctor'}</Text>
-              {clinic.doctors && clinic.doctors.length > 0 ? (
-                <View style={styles.serviceOptions}>
-                  {clinic.doctors.map((docName: string, idx: number) => (
-                    <TouchableOpacity
-                      key={idx}
-                      style={[styles.serviceOption, selectedDoctorIndex === idx && styles.serviceOptionSelected]}
-                      onPress={() => setSelectedDoctorIndex(idx)}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={styles.serviceOptionText}>{docName}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              ) : (
-                <Text style={styles.bookingHint}>{i18n.t('noDoctorsListed') || 'No doctors listed'}</Text>
               )}
 
               {branches.length > 0 && (
@@ -846,7 +811,6 @@ export default function ParentClinicDetailsScreen() {
                 <Text style={styles.bookingSummaryText}>{i18n.t('clinicNameLabel') || 'Clinic'}: {clinic.name}</Text>
                 {selectedBranch ? <Text style={styles.bookingSummaryText}>{i18n.t('branch') || 'Branch'}: {getBranchSummary(selectedBranch)}</Text> : null}
                 <Text style={styles.bookingSummaryText}>{i18n.t('service') || 'Service'}: {reviewService?.name || (i18n.t('notSelectedYet') || 'Not selected yet')}</Text>
-                <Text style={styles.bookingSummaryText}>{i18n.t('doctor') || 'Doctor'}: {reviewDoctor}</Text>
                 <Text style={styles.bookingSummaryText}>{i18n.t('preferredDateTime') || 'Preferred Date & Time'}: {formattedPreferredTime || (i18n.t('notSelectedYet') || 'Not selected yet')}</Text>
                 <Text style={styles.bookingSummaryText}>{i18n.t('shiftPreference') || 'Shift Preference'}: {selectedShift ? (selectedShift === 'Day' ? (i18n.t('dayShift') || 'Before 3PM') : (i18n.t('nightShift') || 'After 3PM')) : (i18n.t('notSelectedYet') || 'Not selected yet')}</Text>
                 <Text style={styles.bookingSummaryText}>{i18n.t('fee') || 'Fee'}: {reviewPrice ? `${reviewPrice} EGP` : '—'}</Text>

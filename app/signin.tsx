@@ -18,7 +18,7 @@ import {
   View,
 } from "react-native";
 import { auth, db } from "../lib/firebase";
-import { normalizePhoneForAuth, normalizePhoneForTwilio } from "../lib/validations";
+import { getPhoneIdentityCandidates, normalizePhoneForAuth, normalizePhoneForTwilio } from "../lib/validations";
 import { lookupEmailIndex } from "../lib/emailIndex";
 import { lookupPhoneIndex } from "../lib/phoneIndex";
 import { isExpectedNetworkError } from "../lib/networkErrors";
@@ -96,12 +96,14 @@ const SignInScreen = () => {
       // Sign in with Firebase Auth
       let userCredential: any;
       const digits = emailOrPhone.replace(/\D/g, "");
+      const phoneCandidates = !isEmail ? getPhoneIdentityCandidates(emailOrPhone) : [];
 
       // We try multiple identifier formats to ensure legacy profiles still work
       const possibleAuthEmails = isEmail
         ? [authEmail]
         : [
-          `user_${digits}@forsa.app`,       // New Universal Format
+          ...phoneCandidates.map((candidate) => `user_${candidate}@forsa.app`),
+          `user_${digits}@forsa.app`,       // Legacy/Raw format
           `user_+${digits}@forsa.app`,      // Old Legacy Format
           `user_20${digits.startsWith('0') ? digits.substring(1) : digits}@forsa.app` // Temporary Format
         ];
@@ -125,15 +127,18 @@ const SignInScreen = () => {
 
       // If all phone formats fail, try phone → authEmail lookup (e.g. account created with email + phone)
       if (!userCredential && !isEmail) {
-        const indexedAuthEmail = await lookupPhoneIndex(digits);
-        if (indexedAuthEmail) {
-          console.log("🔗 Found phone mapping! Attempting login with:", indexedAuthEmail);
-          try {
-            userCredential = await signInWithEmailAndPassword(auth, indexedAuthEmail, password);
-            authEmail = indexedAuthEmail;
-            lastError = null;
-          } catch (error: any) {
-            lastError = error;
+        for (const candidate of phoneCandidates) {
+          const indexedAuthEmail = await lookupPhoneIndex(candidate);
+          if (indexedAuthEmail) {
+            console.log("🔗 Found phone mapping! Attempting login with:", indexedAuthEmail);
+            try {
+              userCredential = await signInWithEmailAndPassword(auth, indexedAuthEmail, password);
+              authEmail = indexedAuthEmail;
+              lastError = null;
+              break;
+            } catch (error: any) {
+              lastError = error;
+            }
           }
         }
       }

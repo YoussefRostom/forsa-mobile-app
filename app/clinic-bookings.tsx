@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as Clipboard from 'expo-clipboard';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Animated, Easing, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View, Alert, RefreshControl } from 'react-native';
@@ -173,6 +174,16 @@ export default function ClinicBookingsScreen() {
 
   const displayName = (b: BookingItem) => b.patientName || b.customerName || '—';
 
+  const handleCopyBookingId = async (booking: BookingItem) => {
+    const publicId = getBookingPublicId(booking);
+    try {
+      await Clipboard.setStringAsync(publicId);
+      Alert.alert(i18n.t('copied') || 'Copied', i18n.t('bookingIdCopied') || 'Booking ID copied to clipboard');
+    } catch {
+      Alert.alert(i18n.t('error') || 'Error', i18n.t('failedToCopy') || 'Failed to copy');
+    }
+  };
+
   const openAdminChat = async () => {
     if (openingAdminChat) return;
 
@@ -310,9 +321,9 @@ export default function ClinicBookingsScreen() {
                       </Text>
                     ) : null}
 
-                    <View style={styles.bookingIdBadge}>
+                    <TouchableOpacity style={styles.bookingIdBadge} onPress={() => void handleCopyBookingId(booking)} activeOpacity={0.8}>
                       <Text style={styles.bookingIdText}>{i18n.t('bookingId') || 'Booking ID'}: {getBookingPublicId(booking)}</Text>
-                    </View>
+                    </TouchableOpacity>
 
                     <View style={styles.bookingDetails}>
                       {formatBookingBranch(booking) ? (
@@ -422,7 +433,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 8,
+    minHeight: 44,
+    paddingVertical: 10,
     paddingHorizontal: 10,
     borderRadius: 16,
     backgroundColor: 'rgba(255, 255, 255, 0.1)',
@@ -474,9 +486,9 @@ const styles = StyleSheet.create({
   },
   bookingCard: {
     backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 16,
+    borderRadius: 18,
+    padding: 22,
+    marginBottom: 18,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.1)',
   },
@@ -494,17 +506,21 @@ const styles = StyleSheet.create({
   },
   patientDetails: { flex: 1 },
   patientName: {
-    fontSize: 20,
+    fontSize: 21,
     fontWeight: 'bold',
     color: '#fff',
     marginBottom: 4,
   },
   statusBadge: {
     paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    minHeight: 30,
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.35)',
   },
-  statusText: { fontSize: 12, fontWeight: 'bold', color: '#fff' },
+  statusText: { fontSize: 12, fontWeight: '700', letterSpacing: 0.2, color: '#fff' },
   bookingIdBadge: {
     alignSelf: 'flex-start',
     backgroundColor: 'rgba(255, 255, 255, 0.12)',
@@ -521,7 +537,7 @@ const styles = StyleSheet.create({
   },
   bookingDetails: { gap: 12, marginBottom: 16 },
   detailRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  detailText: { fontSize: 16, color: 'rgba(255, 255, 255, 0.8)' },
+  detailText: { fontSize: 16, lineHeight: 22, color: 'rgba(255, 255, 255, 0.88)' },
   bookingFooter: {
     flexDirection: 'column',
     justifyContent: 'space-between',
@@ -532,11 +548,12 @@ const styles = StyleSheet.create({
     borderTopColor: 'rgba(255, 255, 255, 0.1)',
   },
   priceLabel: { fontSize: 16, color: 'rgba(255, 255, 255, 0.7)' },
-  priceValue: { fontSize: 20, fontWeight: 'bold', color: '#fff' },
+  priceValue: { fontSize: 21, fontWeight: 'bold', letterSpacing: 0.2, color: '#fff' },
   chatButton: {
     backgroundColor: '#fff',
     borderRadius: 12,
-    paddingVertical: 10,
+    minHeight: 44,
+    paddingVertical: 12,
     paddingHorizontal: 16,
     flexDirection: 'row',
     alignItems: 'center',

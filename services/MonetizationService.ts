@@ -21,6 +21,7 @@ import {
 import { db } from '../lib/firebase';
 import { auth } from '../lib/firebase';
 import { notifyProviderAndAdmins } from './NotificationService';
+import { scheduleBookingReminder } from './BookingReminderService';
 
 export type MonetizationEventSource = 'booking' | 'checkin';
 export type MonetizationStatus =
@@ -754,7 +755,19 @@ export async function createBookingWithTransaction(
         }
 
         rememberWorkingBackendUrl(backendUrl);
-        return payload?.data || null;
+          const createdBooking = payload?.data || null;
+
+          void scheduleBookingReminder(
+            {
+              ...normalizedBooking,
+              ...(createdBooking || {}),
+            },
+            createdBooking?.id
+          ).catch((reminderError) => {
+            console.warn('[MonetizationService] Booking reminder scheduling failed:', reminderError);
+          });
+
+          return createdBooking;
       } catch (error: any) {
         if (error?.name === 'AbortError') {
           lastError = new Error(`Booking service timed out at ${backendUrl}`);

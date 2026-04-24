@@ -1,9 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   Alert,
   Image,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -41,6 +42,8 @@ export default function AdminUploadMediaScreen() {
   const [pendingMedia, setPendingMedia] = useState<{ uri: string; type: 'image' | 'video' } | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<{ [key: number]: boolean }>({});
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const captionModalScrollRef = useRef<ScrollView | null>(null);
 
   React.useEffect(() => {
     const checkAccess = async () => {
@@ -52,6 +55,27 @@ export default function AdminUploadMediaScreen() {
     };
     checkAccess();
   }, [router]);
+
+  React.useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showSub = Keyboard.addListener(showEvent, (event) => {
+      setKeyboardHeight(event.endCoordinates.height || 0);
+      requestAnimationFrame(() => {
+        captionModalScrollRef.current?.scrollToEnd({ animated: true });
+      });
+    });
+
+    const hideSub = Keyboard.addListener(hideEvent, () => {
+      setKeyboardHeight(0);
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   const handleAddMedia = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -126,7 +150,11 @@ export default function AdminUploadMediaScreen() {
   };
 
   return (
-    <KeyboardAvoidingView style={S.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardAvoidingView
+      style={S.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 56 : 0}
+    >
       <ScrollView style={S.scrollView} contentContainerStyle={S.scrollContent} showsVerticalScrollIndicator={false}>
         <View style={S.header}>
           <TouchableOpacity style={S.backButton} onPress={() => router.back()}>
@@ -152,43 +180,62 @@ export default function AdminUploadMediaScreen() {
 
         {showCaptionInput && pendingMedia && (
           <View style={S.captionModal}>
-            <View style={S.captionCard}>
-              <Text style={S.captionTitle}>Add Caption</Text>
-              {pendingMedia.type === 'image' ? (
-                <Image source={{ uri: pendingMedia.uri }} style={S.previewImage} />
-              ) : (
-                <View style={S.previewVideo}>
-                  <Ionicons name="videocam" size={42} color="#fff" />
-                  <Text style={S.previewText}>Video Selected</Text>
+            <KeyboardAvoidingView
+              style={S.captionModalKeyboard}
+              behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+              keyboardVerticalOffset={Platform.OS === 'ios' ? 16 : 0}
+            >
+              <ScrollView
+                ref={captionModalScrollRef}
+                style={S.captionModalScroll}
+                contentContainerStyle={[S.captionModalContent, keyboardHeight > 0 && S.captionModalContentKeyboard]}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
+                <View style={S.captionCard}>
+                  <Text style={S.captionTitle}>Add Caption</Text>
+                  {pendingMedia.type === 'image' ? (
+                    <Image source={{ uri: pendingMedia.uri }} style={S.previewImage} />
+                  ) : (
+                    <View style={S.previewVideo}>
+                      <Ionicons name="videocam" size={42} color="#fff" />
+                      <Text style={S.previewText}>Video Selected</Text>
+                    </View>
+                  )}
+
+                  <TextInput
+                    style={S.captionInput}
+                    placeholder="Enter caption (optional)"
+                    placeholderTextColor={C.muted}
+                    value={captionDraft}
+                    onChangeText={setCaptionDraft}
+                    multiline
+                    numberOfLines={3}
+                    onFocus={() => {
+                      requestAnimationFrame(() => {
+                        captionModalScrollRef.current?.scrollToEnd({ animated: true });
+                      });
+                    }}
+                  />
+
+                  <View style={S.captionButtons}>
+                    <TouchableOpacity
+                      style={[S.captionBtn, S.cancelBtn]}
+                      onPress={() => {
+                        setPendingMedia(null);
+                        setCaptionDraft('');
+                        setShowCaptionInput(false);
+                      }}
+                    >
+                      <Text style={S.cancelBtnText}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[S.captionBtn, S.saveBtn]} onPress={handleSaveCaption}>
+                      <Text style={S.saveBtnText}>Add</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
-              )}
-
-              <TextInput
-                style={S.captionInput}
-                placeholder="Enter caption (optional)"
-                placeholderTextColor={C.muted}
-                value={captionDraft}
-                onChangeText={setCaptionDraft}
-                multiline
-                numberOfLines={3}
-              />
-
-              <View style={S.captionButtons}>
-                <TouchableOpacity
-                  style={[S.captionBtn, S.cancelBtn]}
-                  onPress={() => {
-                    setPendingMedia(null);
-                    setCaptionDraft('');
-                    setShowCaptionInput(false);
-                  }}
-                >
-                  <Text style={S.cancelBtnText}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={[S.captionBtn, S.saveBtn]} onPress={handleSaveCaption}>
-                  <Text style={S.saveBtnText}>Add</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
+              </ScrollView>
+            </KeyboardAvoidingView>
           </View>
         )}
 
@@ -259,12 +306,16 @@ const S = StyleSheet.create({
   addButtonText: { fontSize: 15, fontWeight: '700', color: '#fff' },
 
   captionModal: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(15,23,42,0.5)', justifyContent: 'center', alignItems: 'center', zIndex: 1000 },
+  captionModalKeyboard: { flex: 1, width: '100%' },
+  captionModalScroll: { flex: 1, width: '100%' },
+  captionModalContent: { flexGrow: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 16 },
+  captionModalContentKeyboard: { justifyContent: 'flex-start', paddingTop: 24, paddingBottom: 16 },
   captionCard: { width: '92%', maxWidth: 420, backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: C.border, padding: 14 },
   captionTitle: { fontSize: 16, fontWeight: '800', color: C.text, marginBottom: 10, textAlign: 'center' },
   previewImage: { width: '100%', height: 180, borderRadius: 10, marginBottom: 12, resizeMode: 'cover' },
   previewVideo: { width: '100%', height: 180, borderRadius: 10, marginBottom: 12, backgroundColor: '#334155', justifyContent: 'center', alignItems: 'center' },
   previewText: { marginTop: 6, color: '#fff', fontSize: 13 },
-  captionInput: { backgroundColor: '#f8fafc', borderWidth: 1, borderColor: C.border, borderRadius: 10, padding: 10, color: C.text, fontSize: 14, minHeight: 72, textAlignVertical: 'top' },
+  captionInput: { backgroundColor: '#f8fafc', borderWidth: 1, borderColor: C.border, borderRadius: 10, padding: 10, color: C.text, fontSize: 14, minHeight: 72, maxHeight: 150, textAlignVertical: 'top' },
   captionButtons: { flexDirection: 'row', gap: 10, marginTop: 12 },
   captionBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: 'center' },
   cancelBtn: { backgroundColor: '#e2e8f0' },

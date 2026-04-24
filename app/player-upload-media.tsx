@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as ImagePicker from 'expo-image-picker';
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, Image, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Alert, Image, Keyboard, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { collection, getDocs } from 'firebase/firestore';
 import FootballLoader from '../components/FootballLoader';
@@ -104,6 +104,7 @@ export default function PlayerUploadMediaScreen() {
   const scrollViewRef = useRef<ScrollView | null>(null);
   const mediaCardYRef = useRef(0);
   const captionCardYRef = useRef(0);
+  const captionInputOffsetYRef = useRef(0);
   const previousMediaCountRef = useRef(0);
   const [media, setMedia] = useState<MediaItem[]>([]);
   const [captionDraft, setCaptionDraft] = useState('');
@@ -116,11 +117,15 @@ export default function PlayerUploadMediaScreen() {
   const [taggedUsers, setTaggedUsers] = useState<TaggableUser[]>([]);
   const [availableUsers, setAvailableUsers] = useState<TaggableUser[]>([]);
   const [loadingTagUsers, setLoadingTagUsers] = useState(true);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
 
   const canAddMore = media.length < MAX_MEDIA_ITEMS;
   const remainingSlots = Math.max(0, MAX_MEDIA_ITEMS - media.length);
   const failedCount = Object.values(uploadStatus).filter((status) => status === 'failed').length;
   const successCountVisible = Object.values(uploadStatus).filter((status) => status === 'success').length;
+  const keyboardAwareBottomPadding = showCaptionInput
+    ? Math.max(72, keyboardHeight + 28)
+    : 40;
   const taggedAcademyCount = taggedUsers.filter((user) => user.role === 'academy').length;
   const eligibleTaggableUsers = availableUsers
     .filter((user) => ['player', 'academy'].includes(String(user.role || '').toLowerCase()))
@@ -143,11 +148,58 @@ export default function PlayerUploadMediaScreen() {
     });
   };
 
+  const ensureCaptionEditorVisible = () => {
+    if (!showCaptionInput) return;
+
+    requestAnimationFrame(() => {
+      if (captionCardYRef.current > 0) {
+        scrollToPosition(captionCardYRef.current);
+      } else {
+        scrollViewRef.current?.scrollToEnd({ animated: true });
+      }
+    });
+  };
+
+  const ensureCaptionInputVisible = () => {
+    if (!showCaptionInput) return;
+
+    requestAnimationFrame(() => {
+      const inputAbsoluteY = captionCardYRef.current + captionInputOffsetYRef.current;
+      if (inputAbsoluteY > 0) {
+        // Keep the input comfortably above keyboard instead of just showing the card header.
+        scrollToPosition(Math.max(captionCardYRef.current, inputAbsoluteY - 180));
+      } else {
+        scrollViewRef.current?.scrollToEnd({ animated: true });
+      }
+    });
+  };
+
   useEffect(() => {
     return () => {
       isMountedRef.current = false;
     };
   }, []);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showSub = Keyboard.addListener(showEvent, (event) => {
+      setKeyboardHeight(event.endCoordinates.height || 0);
+      if (showCaptionInput) {
+        ensureCaptionInputVisible();
+      }
+    });
+
+    const hideSub = Keyboard.addListener(hideEvent, () => {
+      setKeyboardHeight(0);
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, [showCaptionInput]);
 
   useEffect(() => {
     let mounted = true;
@@ -205,6 +257,14 @@ export default function PlayerUploadMediaScreen() {
 
     return () => clearTimeout(timer);
   }, [showCaptionInput, pendingMedia?.uri]);
+
+  useEffect(() => {
+    if (!showCaptionInput || keyboardHeight <= 0 || activeCaptionMention === null) return;
+    const timer = setTimeout(() => {
+      ensureCaptionInputVisible();
+    }, 60);
+    return () => clearTimeout(timer);
+  }, [activeCaptionMention, captionMentionSuggestions.length, showCaptionInput, keyboardHeight]);
 
   useEffect(() => {
     const previousCount = previousMediaCountRef.current;
@@ -536,7 +596,11 @@ export default function PlayerUploadMediaScreen() {
   };
 
   return (
-    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'android' ? 'height' : undefined}
+      keyboardVerticalOffset={0}
+    >
       <LinearGradient
         colors={['#000000', '#1a1a1a', '#2d2d2d']}
         style={styles.gradient}
@@ -557,9 +621,10 @@ export default function PlayerUploadMediaScreen() {
 
           <ScrollView 
             ref={scrollViewRef}
-            contentContainerStyle={styles.scrollContent}
+            contentContainerStyle={[styles.scrollContent, { paddingBottom: keyboardAwareBottomPadding }]}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
+            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
           >
             <View style={styles.tipCard}>
               <View style={styles.tipIconWrap}>
@@ -737,6 +802,13 @@ export default function PlayerUploadMediaScreen() {
                   maxLength={CAPTION_LIMIT}
                   placeholderTextColor="#999"
                   multiline
+                  onLayout={(event) => {
+                    captionInputOffsetYRef.current = event.nativeEvent.layout.y;
+                  }}
+                  onFocus={() => {
+                    ensureCaptionInputVisible();
+                    setTimeout(() => ensureCaptionInputVisible(), 120);
+                  }}
                 />
 
                 {taggedUsers.length > 0 && (
@@ -756,7 +828,13 @@ export default function PlayerUploadMediaScreen() {
                   loadingTagUsers ? (
                     <Text style={styles.tagStateText}>{i18n.t('loadingPeople') || 'Loading people...'}</Text>
                   ) : captionMentionSuggestions.length > 0 ? (
-                    <View style={styles.suggestionList}>
+                    <ScrollView
+                      style={styles.suggestionList}
+                      contentContainerStyle={styles.suggestionListContent}
+                      nestedScrollEnabled
+                      keyboardShouldPersistTaps="handled"
+                      showsVerticalScrollIndicator={false}
+                    >
                       {captionMentionSuggestions.map((user) => (
                         <TouchableOpacity
                           key={user.id}
@@ -771,7 +849,7 @@ export default function PlayerUploadMediaScreen() {
                           <Ionicons name="at-circle-outline" size={18} color="#111827" />
                         </TouchableOpacity>
                       ))}
-                    </View>
+                    </ScrollView>
                   ) : (
                     <Text style={styles.tagStateText}>{i18n.t('noUserMatches') || 'No users match that search yet.'}</Text>
                   )
@@ -957,7 +1035,16 @@ const styles = StyleSheet.create({
   },
   suggestionList: {
     marginTop: 10,
+    maxHeight: 172,
+    borderRadius: 12,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#f3f4f6',
+    backgroundColor: '#fff',
+  },
+  suggestionListContent: {
     gap: 8,
+    padding: 8,
   },
   suggestionItem: {
     flexDirection: 'row',
@@ -1233,6 +1320,7 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     padding: 24,
     marginBottom: 20,
+    overflow: 'hidden',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 10 },
     shadowOpacity: 0.3,
@@ -1286,6 +1374,7 @@ const styles = StyleSheet.create({
     color: '#000',
     marginBottom: 8,
     minHeight: 80,
+    maxHeight: 150,
     textAlignVertical: 'top',
   },
   captionCount: {
