@@ -18,7 +18,7 @@
     "@aws-sdk/client-s3": "^3.940.0",
     "@aws-sdk/s3-request-presigner": "^3.940.0",
     "@expo/vector-icons": "^15.0.2",
-    "@react-native-async-storage/async-storage": "1.24.0",
+    "@react-native-async-storage/async-storage": "^2.2.0",
     "@react-native-community/datetimepicker": "8.4.4",
     "@react-native-community/slider": "5.0.1",
     "@react-native-picker/picker": "2.11.1",
@@ -91,12 +91,5 @@
     "typescript": "~5.9.2",
     "utf-8-validate": "5.0.10"
   },
-  "private": true,
-  "expo": {
-    "install": {
-      "exclude": [
-        "@react-native-async-storage/async-storage"
-      ]
-    }
-  }
+  "private": true
 }
