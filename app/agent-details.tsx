@@ -8,6 +8,8 @@ import { db } from '../lib/firebase';
 import { startConversationWithUser } from '../services/BookingMessagingService';
 import i18n from '../locales/i18n';
 import FootballLoader from '../components/FootballLoader';
+import SuspendedBadge from '../components/SuspendedBadge';
+import { isSuspendedEntity } from '../lib/suspension';
 
 const cityLabels = i18n.t('cities', { returnObjects: true }) as Record<string, string>;
 
@@ -21,6 +23,8 @@ type Agent = {
   license?: string;
   phone?: string;
   email?: string;
+  isSuspended?: boolean;
+  status?: string;
 };
 
 export default function AgentDetailsScreen() {
@@ -37,9 +41,13 @@ export default function AgentDetailsScreen() {
     const fetchAgent = async () => {
       setLoading(true);
       try {
-        const agentDoc = await getDoc(doc(db, 'agents', id as string));
+        const [agentDoc, userDoc] = await Promise.all([
+          getDoc(doc(db, 'agents', id as string)),
+          getDoc(doc(db, 'users', id as string)),
+        ]);
         if (!agentDoc.exists()) throw new Error('Agent not found');
         const data = agentDoc.data();
+        const userData = userDoc.exists() ? userDoc.data() : {};
         setAgent({
           id: agentDoc.id,
           name: `${data.firstName || ''} ${data.lastName || ''}`.trim(),
@@ -50,6 +58,8 @@ export default function AgentDetailsScreen() {
           license: data.license || '',
           phone: data.phone || '',
           email: data.email || '',
+          isSuspended: userData?.isSuspended === true,
+          status: userData?.status || '',
         });
       } catch (err: any) {
         setError(err);
@@ -96,6 +106,8 @@ export default function AgentDetailsScreen() {
     );
   }
 
+  const agentSuspended = isSuspendedEntity(agent);
+
   return (
     <LinearGradient colors={['#000', '#1a1a1a', '#2d2d2d']} style={{ flex: 1 }}>
       <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
@@ -116,6 +128,7 @@ export default function AgentDetailsScreen() {
             )}
           </View>
           <Text style={styles.heroName}>{agent.name}</Text>
+          {agentSuspended && <SuspendedBadge tone="light" />}
           {!!agent.city && (
             <View style={styles.locationRow}>
               <Ionicons name="location" size={14} color="#666" />

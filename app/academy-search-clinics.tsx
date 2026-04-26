@@ -3,13 +3,15 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import Slider from '@react-native-community/slider';
 import React, { useRef, useState, useEffect } from 'react';
-import { Animated, Easing, FlatList, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, RefreshControl } from 'react-native';
+import { Alert, Animated, Easing, FlatList, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, RefreshControl } from 'react-native';
 import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import i18n from '../locales/i18n';
 import { db } from '../lib/firebase';
 import { collection, getDocs, query } from 'firebase/firestore';
 import FootballLoader from '../components/FootballLoader';
+import SuspendedBadge from '../components/SuspendedBadge';
+import { isSuspendedEntity } from '../lib/suspension';
 
 const cities = Object.entries(i18n.t('cities', { returnObjects: true }) as Record<string, string>).map(([key, label]) => ({ key, label }));
 const servicesList = [
@@ -34,6 +36,8 @@ interface Clinic {
   services: string[];
   minPrice: number;
   servicePrices: Record<string, number>;
+  isSuspended?: boolean;
+  status?: string;
 }
 
 export default function AcademySearchClinicsScreen() {
@@ -82,11 +86,16 @@ export default function AcademySearchClinicsScreen() {
       setLoadError(null);
       const clinicsRef = collection(db, 'clinics');
       const q = query(clinicsRef);
-      const querySnapshot = await getDocs(q);
+      const [querySnapshot, usersSnapshot] = await Promise.all([
+        getDocs(q),
+        getDocs(collection(db, 'users')),
+      ]);
+      const userMap = new Map(usersSnapshot.docs.map((userDoc) => [userDoc.id, userDoc.data()]));
 
       const clinicList: Clinic[] = [];
       querySnapshot.forEach((docSnap) => {
         const data = docSnap.data();
+        const userData = userMap.get(docSnap.id);
         const clinicServices: string[] = [];
         const servicePrices: Record<string, number> = {};
         let minServicePrice = Infinity;
@@ -115,6 +124,8 @@ export default function AcademySearchClinicsScreen() {
           services: clinicServices,
           minPrice: minServicePrice === Infinity ? 0 : minServicePrice,
           servicePrices,
+          isSuspended: isSuspendedEntity({ ...data, ...userData }),
+          status: userData?.status || data.status || '',
         });
       });
 
@@ -179,6 +190,18 @@ export default function AcademySearchClinicsScreen() {
     setCity('');
     setService('');
     setPrice(null);
+  };
+
+  const handleClinicPress = (clinic: Clinic) => {
+    if (clinic.isSuspended) {
+      Alert.alert(
+        i18n.t('suspendedBadge') || 'Suspended',
+        i18n.t('suspendedProviderUnavailable') || 'This provider is suspended and unavailable right now.'
+      );
+      return;
+    }
+
+    router.push({ pathname: '/academy-clinic-details', params: { id: clinic.id } });
   };
 
   return (
@@ -366,8 +389,8 @@ export default function AcademySearchClinicsScreen() {
               }
               renderItem={({ item }) => (
                 <TouchableOpacity
-                  onPress={() => router.push({ pathname: '/academy-clinic-details', params: { id: item.id } })}
-                  style={styles.card}
+                  onPress={() => handleClinicPress(item)}
+                  style={[styles.card, item.isSuspended && styles.cardSuspended]}
                   activeOpacity={0.8}
                 >
                   <View style={styles.cardHeader}>
@@ -382,6 +405,11 @@ export default function AcademySearchClinicsScreen() {
                       </View>
                     </View>
                   </View>
+                  {item.isSuspended && (
+                    <View style={styles.cardSuspendedBadgeRow}>
+                      <SuspendedBadge tone="light" />
+                    </View>
+                  )}
                   <Text style={styles.cardDesc}>{item.description}</Text>
                   <View style={styles.cardFooter}>
                     <View style={styles.cardServices}>
@@ -491,6 +519,8 @@ const styles = StyleSheet.create({
   loadingText: { fontSize: 16, color: '#fff', marginTop: 16 },
   listContent: { paddingHorizontal: 20, paddingBottom: 40 },
   card: { backgroundColor: '#fff', borderRadius: 20, padding: 20, marginBottom: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 12, elevation: 5 },
+  cardSuspended: { opacity: 0.82, borderWidth: 1, borderColor: '#fecaca' },
+  cardSuspendedBadgeRow: { marginBottom: 10 },
   cardHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   cardIcon: { width: 50, height: 50, borderRadius: 25, backgroundColor: '#f0f0f0', justifyContent: 'center', alignItems: 'center', marginRight: 12 },
   cardHeaderText: { flex: 1 },

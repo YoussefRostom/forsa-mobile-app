@@ -22,6 +22,11 @@ export function isTransientNotificationDispatchError(error: unknown): boolean {
   return /timed out|aborted|aborterror|network request failed|failed to fetch/i.test(message);
 }
 
+function isPermissionDeniedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || '');
+  return /missing or insufficient permissions|permission-denied/i.test(message);
+}
+
 export type NotificationType = 'booking' | 'checkin' | 'report' | 'info' | 'system';
 
 export interface Notification {
@@ -96,7 +101,8 @@ async function dispatchNotifications(params: {
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(payload?.error?.message || 'Failed to create notification');
+    const details = payload?.error?.details ? ` ${JSON.stringify(payload.error.details)}` : '';
+    throw new Error(`${payload?.error?.message || 'Failed to create notification'}${details}`);
   }
 
   return Array.isArray(payload?.data?.notificationIds)
@@ -152,6 +158,19 @@ async function createNotificationFallbackForRecipient(params: {
     createdBy: user.uid,
     data: sanitizeNotificationPayload(params.data) ?? null,
   });
+
+  if (params.userId !== user.uid) {
+    void sendPushNotificationsToUsers(
+      [params.userId],
+      params.title,
+      params.body,
+      sanitizeNotificationPayload(params.data)
+    ).catch((error) => {
+      if (!isTransientNotificationDispatchError(error)) {
+        console.warn('[NotificationService] Push fanout failed after recipient fallback write:', error);
+      }
+    });
+  }
 
   return ref.id;
 }
@@ -297,17 +316,29 @@ export async function createNotificationsForUsers(
       data,
     });
   } catch (error) {
-    await Promise.all(
-      unique.map((userId) =>
-        createNotificationFallbackForRecipient({
-          userId,
-          title,
-          body,
-          type,
-          data,
-        })
-      )
-    );
+    try {
+      await Promise.all(
+        unique.map((userId) =>
+          createNotificationFallbackForRecipient({
+            userId,
+            title,
+            body,
+            type,
+            data,
+          })
+        )
+      );
+    } catch (fallbackError) {
+      if (isPermissionDeniedError(fallbackError)) {
+        console.warn(
+          '[NotificationService] Skipping local multi-recipient notification fallback because Firestore rules rejected it:',
+          fallbackError
+        );
+        return;
+      }
+
+      throw fallbackError;
+    }
   }
 }
 

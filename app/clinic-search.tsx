@@ -8,9 +8,12 @@ import { Alert, Animated, Easing, FlatList, KeyboardAvoidingView, Modal, Platfor
 import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import i18n from '../locales/i18n';
-import { db } from '../lib/firebase';
-import { collection, getDocs, query } from 'firebase/firestore';
+import { auth, db } from '../lib/firebase';
+import { collection, getDocs, query, onSnapshot } from 'firebase/firestore';
 import FootballLoader from '../components/FootballLoader';
+import { toggleFollow } from '../services/FollowService';
+import SuspendedBadge from '../components/SuspendedBadge';
+import { isSuspendedEntity } from '../lib/suspension';
 
 const cities = Object.entries(i18n.t('cities', { returnObjects: true }) as Record<string, string>).map(([key, label]) => ({ key, label }));
 const cityOptions = cities.filter(({ key }) => !['giza', 'newCairo'].includes(key));
@@ -213,6 +216,8 @@ interface Clinic {
   minPrice: number;
   servicePrices: Record<string, number>;
   locations?: { city?: string; district?: string; address?: string }[];
+  isSuspended?: boolean;
+  status?: string;
 }
 
 export default function ClinicSearchScreen() {
@@ -232,8 +237,10 @@ export default function ClinicSearchScreen() {
   const [distanceMap, setDistanceMap] = useState<Record<string, number>>({});
   const [locationLoading, setLocationLoading] = useState(false);
   const [clinics, setClinics] = useState<Clinic[]>([]);
+  const [followStates, setFollowStates] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
   const router = useRouter();
+  const currentUid = auth.currentUser?.uid || '';
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const availableDistricts = React.useMemo(() => (city ? districtsByCity[city] || [] : []), [city]);
   const isDistrictEnabled = Boolean(city && availableDistricts.length > 0);
@@ -298,11 +305,16 @@ export default function ClinicSearchScreen() {
 
       const clinicsRef = collection(db, 'clinics');
       const q = query(clinicsRef);
-      const querySnapshot = await getDocs(q);
+      const [querySnapshot, usersSnapshot] = await Promise.all([
+        getDocs(q),
+        getDocs(collection(db, 'users')),
+      ]);
+      const userMap = new Map(usersSnapshot.docs.map((userDoc) => [userDoc.id, userDoc.data()]));
 
       const clinicList: Clinic[] = [];
       querySnapshot.forEach((doc) => {
         const data = doc.data();
+        const userData = userMap.get(doc.id);
 
         const clinicServices: string[] = [];
         const servicePrices: Record<string, number> = {};
@@ -335,6 +347,8 @@ export default function ClinicSearchScreen() {
           minPrice: minServicePrice === Infinity ? 0 : minServicePrice,
           servicePrices,
           locations: Array.isArray(data.locations) ? data.locations : [],
+          isSuspended: isSuspendedEntity({ ...data, ...userData }),
+          status: userData?.status || data.status || '',
         });
       });
 
@@ -358,6 +372,25 @@ export default function ClinicSearchScreen() {
   useEffect(() => {
     fetchClinics();
   }, [fetchClinics]);
+
+  useEffect(() => {
+    if (!currentUid) {
+      setFollowStates({});
+      return;
+    }
+
+    return onSnapshot(
+      collection(db, `users/${currentUid}/following`),
+      (snap) => {
+        const next: Record<string, boolean> = {};
+        snap.docs.forEach((docSnap) => {
+          next[docSnap.id] = true;
+        });
+        setFollowStates(next);
+      },
+      () => setFollowStates({})
+    );
+  }, [currentUid]);
 
   useEffect(() => {
     if (maxAvailablePrice <= 0) {
@@ -430,6 +463,28 @@ export default function ClinicSearchScreen() {
 
     setSortBy(sortKey);
     setSortModal(false);
+  };
+
+  const handleToggleFollow = async (clinic: Clinic) => {
+    setFollowStates((prev) => ({ ...prev, [clinic.id]: !prev[clinic.id] }));
+    try {
+      await toggleFollow(clinic.id, 'clinic', clinic.clinicName || clinic.name, '');
+    } catch (error) {
+      setFollowStates((prev) => ({ ...prev, [clinic.id]: !prev[clinic.id] }));
+      console.error('[ClinicSearch] Follow toggle failed:', error);
+    }
+  };
+
+  const handleClinicPress = (clinic: Clinic) => {
+    if (clinic.isSuspended) {
+      Alert.alert(
+        i18n.t('suspendedBadge') || 'Suspended',
+        i18n.t('suspendedProviderUnavailable') || 'This provider is suspended and unavailable right now.'
+      );
+      return;
+    }
+
+    router.push({ pathname: '/clinic-details', params: { clinic: JSON.stringify(clinic) } });
   };
 
   const filtered = clinics
@@ -769,6 +824,7 @@ export default function ClinicSearchScreen() {
             <FlatList
               data={[]}
               keyExtractor={(_, index) => `loading-${index}`}
+              renderItem={() => null}
               ListHeaderComponent={filtersHeader}
               ListEmptyComponent={
                 <View style={styles.loadingContainer}>
@@ -801,11 +857,12 @@ export default function ClinicSearchScreen() {
                   .filter(Boolean)
                   .join(', ');
                 const branchCount = Array.isArray(item.locations) && item.locations.length ? item.locations.length : 1;
+                const isFollowing = !!followStates[item.id];
 
                 return (
                   <TouchableOpacity
-                    onPress={() => router.push({ pathname: '/clinic-details', params: { clinic: JSON.stringify(item) } })}
-                    style={styles.card}
+                    onPress={() => handleClinicPress(item)}
+                    style={[styles.card, item.isSuspended && styles.cardSuspended]}
                     activeOpacity={0.8}
                   >
                     <View style={styles.cardHeader}>
@@ -821,7 +878,24 @@ export default function ClinicSearchScreen() {
                           </Text>
                         </View>
                       </View>
+                      <TouchableOpacity
+                        style={[styles.followPill, isFollowing && styles.followPillActive]}
+                        onPress={(event: any) => {
+                          event.stopPropagation?.();
+                          void handleToggleFollow(item);
+                        }}
+                        activeOpacity={0.85}
+                      >
+                        <Text style={[styles.followPillText, isFollowing && styles.followPillTextActive]}>
+                          {isFollowing ? (i18n.t('following') || 'Following') : (i18n.t('follow') || 'Follow')}
+                        </Text>
+                      </TouchableOpacity>
                     </View>
+                    {item.isSuspended && (
+                      <View style={styles.cardSuspendedBadgeRow}>
+                        <SuspendedBadge tone="light" />
+                      </View>
+                    )}
                     <Text style={styles.cardDesc}>{item.description}</Text>
                     {Number.isFinite(distanceMap[item.id]) && (
                       <Text style={styles.cardDistanceText}>
@@ -1173,6 +1247,14 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 5,
   },
+  cardSuspended: {
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    opacity: 0.9,
+  },
+  cardSuspendedBadgeRow: {
+    marginBottom: 10,
+  },
   cardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1189,12 +1271,37 @@ const styles = StyleSheet.create({
   },
   cardHeaderText: {
     flex: 1,
+    minWidth: 0,
   },
   cardTitle: {
     fontSize: 18,
     fontWeight: 'bold',
     color: '#000',
     marginBottom: 4,
+    flexShrink: 1,
+  },
+  followPill: {
+    minWidth: 78,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#111827',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    marginLeft: 8,
+  },
+  followPillActive: {
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#10b981',
+  },
+  followPillText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  followPillTextActive: {
+    color: '#065f46',
   },
   cardLocation: {
     flexDirection: 'row',

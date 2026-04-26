@@ -3,6 +3,7 @@ import {
   listUsers,
   getUserById,
   updateUserStatus,
+  deleteUserPermanently,
   listAllBookings,
   getBookingById as getAdminBookingById,
   createAdminMessage,
@@ -10,10 +11,12 @@ import {
   getRevenueSummary,
   collectRevenue,
 } from '../controllers/admin.controller';
-import { authenticate, requireRole } from '../middleware/auth.middleware';
+import { authenticate, authenticateJwtOrFirebase, requireRole } from '../middleware/auth.middleware';
 import { UserRole } from '../types';
 
 const router = Router();
+
+router.delete('/users/:id', authenticateJwtOrFirebase, requireRole(UserRole.ADMIN), deleteUserPermanently);
 
 // All admin routes require authentication and admin role
 router.use(authenticate);
@@ -247,4 +250,3 @@ router.get('/users/:id/messages', async (req, res, next) => {
 });
 
 export default router;
-

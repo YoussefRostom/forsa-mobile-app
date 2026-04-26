@@ -14,8 +14,9 @@ import {
   getDoc
 } from 'firebase/firestore';
 import { getCurrentUserRole } from './UserRoleService';
+import { resolveUserDisplayName } from '../lib/userDisplayName';
 
-export type ReportTargetType = 'post' | 'user';
+export type ReportTargetType = 'post' | 'user' | 'academy' | 'clinic';
 export type ReportReason = 'spam' | 'harassment' | 'nudity' | 'violence' | 'fake' | 'other';
 export type ReportStatus = 'open' | 'reviewed' | 'resolved';
 
@@ -34,6 +35,9 @@ export interface ReportSnapshot {
   contentText?: string;
   postTimestamp?: Timestamp | any;
   reportedUserName?: string;
+  reportedTargetName?: string;
+  reportedTargetRole?: string;
+  reporterName?: string;
 }
 
 export interface Report {
@@ -79,6 +83,34 @@ function removeUndefinedFields(obj: any): any {
     return cleaned;
   }
   return obj;
+}
+
+function getReportReasonLabel(reason: ReportReason): string {
+  const labels: Record<ReportReason, string> = {
+    spam: 'spam',
+    harassment: 'harassment',
+    nudity: 'nudity or sexual content',
+    violence: 'violence or threats',
+    fake: 'fake or misleading',
+    other: 'other',
+  };
+
+  return labels[reason] || reason;
+}
+
+function getReportTargetLabel(targetType: ReportTargetType): string {
+  switch (targetType) {
+    case 'post':
+      return 'post';
+    case 'user':
+      return 'user';
+    case 'academy':
+      return 'academy';
+    case 'clinic':
+      return 'clinic';
+    default:
+      return 'item';
+  }
 }
 
 /**
@@ -160,9 +192,16 @@ export async function createReport(params: CreateReportParams): Promise<string> 
 
     // Get reporter role
     const reporterRole = await getCurrentUserRole();
+    const reporterDoc = await getDoc(doc(db, 'users', user.uid));
+    const reporterName = reporterDoc.exists()
+      ? resolveUserDisplayName(reporterDoc.data(), user.displayName || 'Unknown user')
+      : (user.displayName || 'Unknown user');
 
     // Clean snapshot to remove undefined values (Firestore doesn't allow undefined)
-    const cleanedSnapshot = params.snapshot ? removeUndefinedFields(params.snapshot) : null;
+    const cleanedSnapshot = removeUndefinedFields({
+      ...(params.snapshot || {}),
+      reporterName,
+    });
 
     // Create report document - ensure no undefined values
     const reportData = {
@@ -185,11 +224,26 @@ export async function createReport(params: CreateReportParams): Promise<string> 
     const reportRef = await addDoc(collection(db, 'reports'), cleanedReportData);
     try {
       const { notifyAdmins } = await import('./NotificationService');
+      const targetLabel = getReportTargetLabel(params.targetType);
+      const targetName =
+        cleanedSnapshot?.reportedTargetName ||
+        cleanedSnapshot?.reportedUserName ||
+        `${targetLabel} ${params.targetId}`;
+      const reasonLabel = getReportReasonLabel(params.reason);
+      const detailNote = params.details?.trim();
+
       await notifyAdmins(
-        `New ${params.targetType} report`,
-        params.details || params.reason || `Report #${reportRef.id}`,
+        `New ${targetLabel} report`,
+        `${reporterName} reported ${targetLabel} ${targetName} for ${reasonLabel}${detailNote ? `: ${detailNote}` : ''}`,
         'report',
-        { reportId: reportRef.id, targetType: params.targetType, targetId: params.targetId }
+        {
+          reportId: reportRef.id,
+          targetType: params.targetType,
+          targetId: params.targetId,
+          reporterName,
+          targetName,
+          reason: reasonLabel,
+        }
       );
     } catch (e) {
       console.warn('Report notification failed:', e);
@@ -312,4 +366,3 @@ export async function updateReportStatus(
     throw new Error(`Failed to update report: ${error.message}`);
   }
 }
-

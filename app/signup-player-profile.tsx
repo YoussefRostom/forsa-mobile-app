@@ -3,6 +3,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
+import { useOnboarding } from '../context/OnboardingContext';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { doc, setDoc } from 'firebase/firestore';
 import React, { useMemo, useRef, useState } from 'react';
@@ -41,6 +42,7 @@ import {
 } from '../lib/validations';
 import i18n from '../locales/i18n';
 import FootballLoader from '../components/FootballLoader';
+import SignupStepBar from '../components/SignupStepBar';
 import { notifyAdminsOfNewSignup } from '../services/SignupNotificationService';
 // OTP functionality commented out - direct Firebase signup enabled
 // import OtpModal from '../components/OtpModal';
@@ -67,6 +69,7 @@ interface Errors {
 
 const SignupPlayer = () => {
   const router = useRouter();
+  const { startOnboarding } = useOnboarding();
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [dob, setDob] = useState<Date | null>(null);
@@ -310,20 +313,19 @@ const SignupPlayer = () => {
       const authEmail = `user_${phoneForAuth}@forsa.app`;
 
       // Prevent duplicates across legacy/raw and canonical phone identities
+      const normalizedEmail = email.trim();
       const phoneCandidates = getPhoneIdentityCandidates(phone);
-      for (const candidate of phoneCandidates) {
-        const existingAuth = await lookupPhoneIndex(candidate);
-        if (existingAuth) {
-          throw { code: 'forsa/phone-already-in-use' };
-        }
+      const [existingPhoneMatches, existingEmailAuth] = await Promise.all([
+        Promise.all(phoneCandidates.map((candidate) => lookupPhoneIndex(candidate))),
+        normalizedEmail ? lookupEmailIndex(normalizedEmail) : Promise.resolve(null),
+      ]);
+      if (existingPhoneMatches.some(Boolean)) {
+        throw { code: 'forsa/phone-already-in-use' };
       }
 
       // Pre-check: if email provided, ensure it is not already taken
-      if (email && email.trim().length > 0) {
-        const existingAuth = await lookupEmailIndex(email.trim());
-        if (existingAuth) {
-          throw { code: 'forsa/email-already-in-use' };
-        }
+      if (existingEmailAuth) {
+        throw { code: 'forsa/email-already-in-use' };
       }
 
       // console.log('[Signup] Creating Firebase user with email:', authEmail);
@@ -336,26 +338,20 @@ const SignupPlayer = () => {
       const dobString = formatDateForDB(dob);
       let profilePhotoUrl = '';
       let nationalIdPhotoUrl = '';
-      if (profilePhoto) {
-        // console.log('[Signup] Uploading profile photo to Cloudinary...');
-        try {
-          const cloudinaryResponse = await uploadMedia(profilePhoto, 'image');
-          profilePhotoUrl = cloudinaryResponse.secure_url;
-        } catch (error: any) {
-          console.error('Error uploading profile photo:', error);
-          throw new Error('Failed to upload profile photo. Please try again.');
-        }
+      const [profilePhotoUpload, nationalIdUpload] = await Promise.all([
+        profilePhoto ? uploadMedia(profilePhoto, 'image') : Promise.resolve(null),
+        nationalIdPhoto
+          ? uploadMedia(nationalIdPhoto, 'image').catch((error: any) => {
+              console.error('Error uploading national ID photo:', error);
+              return null;
+            })
+          : Promise.resolve(null),
+      ]);
+      if (profilePhoto && !profilePhotoUpload) {
+        throw new Error('Failed to upload profile photo. Please try again.');
       }
-      if (nationalIdPhoto) {
-        // console.log('[Signup] Uploading national ID photo to Cloudinary...');
-        try {
-          const cloudinaryResponse = await uploadMedia(nationalIdPhoto, 'image');
-          nationalIdPhotoUrl = cloudinaryResponse.secure_url;
-        } catch (error: any) {
-          console.error('Error uploading national ID photo:', error);
-          // Don't throw here, national ID photo is optional
-        }
-      }
+      profilePhotoUrl = profilePhotoUpload?.secure_url || '';
+      nationalIdPhotoUrl = nationalIdUpload?.secure_url || '';
 
       // Step 3: Save extended player profile to Firestore
       const userData = {
@@ -379,35 +375,27 @@ const SignupPlayer = () => {
         updatedAt: new Date().toISOString(),
       };
       // console.log('[Signup] Saving to Firestore...');
-      await setDoc(doc(db, 'users', uid), userData, { merge: true });
-      await setDoc(doc(db, 'players', uid), { ...userData, highlightVideo: highlightVideo || '' });
+      await Promise.all([
+        setDoc(doc(db, 'users', uid), userData, { merge: true }),
+        setDoc(doc(db, 'players', uid), { ...userData, highlightVideo: highlightVideo || '' }),
+        normalizedEmail ? writeEmailIndex(normalizedEmail, authEmail) : Promise.resolve(),
+        writePhoneIndex(phoneForAuth, authEmail),
+      ]);
 
       // Save email → authEmail mapping for email-based login
-      if (email && email.trim().length > 0) {
-        await writeEmailIndex(email.trim(), authEmail);
-      }
-      await writePhoneIndex(phoneForAuth, authEmail);
+      startOnboarding('player');
 
-      try {
-        await notifyAdminsOfNewSignup({
-          signupUserId: uid,
-          role: 'player',
-          userData,
-        });
-      } catch (error) {
+      void notifyAdminsOfNewSignup({
+        signupUserId: uid,
+        role: 'player',
+        userData,
+      }).catch((error) => {
         console.warn('[SignupPlayer] Failed to notify admins about new signup:', error);
-      }
+      });
 
-      // console.log('[Signup] Firestore saved! User is logged in and navigating to player-feed...');
-
-      // Step 4: Generate check-in code (non-blocking)
-      try {
-        const { ensureCheckInCodeForCurrentUser } = await import('../services/CheckInCodeService');
-        await ensureCheckInCodeForCurrentUser();
-      } catch { }
-
-      // Step 5: User is already signed in via createUserWithEmailAndPassword, redirect to dashboard
-      router.replace('/player-feed');
+      void import('../services/CheckInCodeService')
+        .then(({ ensureCheckInCodeForCurrentUser }) => ensureCheckInCodeForCurrentUser())
+        .catch(() => undefined);
     } catch (err: any) {
       // console.log('[Signup] Error in handleSignup:', err.message, err);
       let errorMsg = i18n.t('signupFailedMessage');
@@ -529,10 +517,16 @@ const SignupPlayer = () => {
             </View>
           </View>
 
+          <SignupStepBar
+            currentStep={2}
+            totalSteps={3}
+            stepLabels={['Account Type', 'Your Profile', 'Get Started']}
+          />
+
           <ScrollView
             ref={scrollViewRef}
             contentContainerStyle={styles.scrollContent}
-            keyboardShouldPersistTaps="never"
+            keyboardShouldPersistTaps="handled"
             keyboardDismissMode="on-drag"
             showsVerticalScrollIndicator={false}
           >

@@ -6,7 +6,7 @@ import { Animated, Easing, FlatList, KeyboardAvoidingView, Platform, StyleSheet,
 import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import i18n from '../locales/i18n';
-import { subscribeToConversations, Conversation, findAdminUserId, getOrCreateConversation } from '../services/MessagingService';
+import { subscribeToConversations, Conversation, findAdminUserId, getOrCreateConversation, clearConversationUnreadCache } from '../services/MessagingService';
  
 import { auth } from '../lib/firebase';
 import FootballLoader from '../components/FootballLoader';
@@ -55,6 +55,21 @@ export default function ParentMessagesScreen() {
       unsubscribe();
     };
   }, []);
+
+  const openConversation = (conversation: Conversation, displayName: string) => {
+    clearConversationUnreadCache(conversation.id);
+    setConversations((prev) =>
+      prev.map((item) => (item.id === conversation.id ? { ...item, unreadCount: 0 } : item))
+    );
+    router.push({
+      pathname: '/parent-chat',
+      params: {
+        conversationId: conversation.id,
+        otherUserId: conversation.otherParticipantId || '',
+        contact: displayName,
+      },
+    });
+  };
 
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -113,14 +128,7 @@ export default function ParentMessagesScreen() {
                 return (
                   <TouchableOpacity 
                     style={styles.conversationCard}
-                    onPress={() => router.push({
-                      pathname: '/parent-chat',
-                      params: {
-                        conversationId: item.id,
-                        otherUserId: item.otherParticipantId || '',
-                        contact: displayName
-                      }
-                    })}
+                    onPress={() => openConversation(item, displayName)}
                     activeOpacity={0.8}
                   >
                     <View style={styles.avatarContainer}>

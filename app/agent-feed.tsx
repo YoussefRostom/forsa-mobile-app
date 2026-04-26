@@ -1,24 +1,29 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import { collection, onSnapshot, getFirestore, orderBy, query, where } from 'firebase/firestore';
+import { collection, doc, getDoc, onSnapshot, getFirestore, orderBy, query, where } from 'firebase/firestore';
 import React, { useRef } from 'react';
-import { Animated, Easing, FlatList, Image, KeyboardAvoidingView, Modal, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Animated, Easing, FlatList, Image, KeyboardAvoidingView, Modal, PanResponder, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Video, ResizeMode } from 'expo-av';
 import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import PostActionsMenu from '../components/PostActionsMenu';
+import CommentsSheet from '../components/feed/CommentsSheet';
+import FeedAuthorAvatar from '../components/feed/FeedAuthorAvatar';
+import PostSocialActions from '../components/feed/PostSocialActions';
 import UploadProgressBanner from '../components/UploadProgressBanner';
 import ZoomableFeedMedia from '../components/feed/ZoomableFeedMedia';
 import i18n from '../locales/i18n';
-import { auth } from '../lib/firebase';
+import { auth, db } from '../lib/firebase';
 import { getUserDisplayName } from '../services/AgentDataService';
 import FootballLoader from '../components/FootballLoader';
+import { toggleFollow } from '../services/FollowService';
 
 export default function AgentFeedScreen() {
   const router = useRouter();
   const { openMenu } = useHamburgerMenu();
   const [feed, setFeed] = React.useState<any[]>([]);
+  const [activeFeedSector, setActiveFeedSector] = React.useState<'general' | 'following'>('general');
   const [loading, setLoading] = React.useState(true);
   const [userNames, setUserNames] = React.useState<{ [key: string]: string }>({});
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
@@ -27,6 +32,13 @@ export default function AgentFeedScreen() {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const [agentPosts, setAgentPosts] = React.useState<any[]>([]);
   const [adminPosts, setAdminPosts] = React.useState<any[]>([]);
+  const [commentsPostId, setCommentsPostId] = React.useState<string | null>(null);
+  const [currentUserName, setCurrentUserName] = React.useState<string>('');
+  const [currentUserPhoto, setCurrentUserPhoto] = React.useState<string | null>(null);
+  const [followStates, setFollowStates] = React.useState<Record<string, boolean>>({});
+  const [followedUserIds, setFollowedUserIds] = React.useState<string[]>([]);
+  const followAnim = React.useRef<Record<string, Animated.Value>>({}).current;
+  const feedSectors: Array<'general' | 'following'> = ['general', 'following'];
 
   // Merge agent posts and admin posts (deduplicate by post ID)
   React.useEffect(() => {
@@ -77,6 +89,47 @@ export default function AgentFeedScreen() {
       useNativeDriver: true,
     }).start();
   }, [fadeAnim]);
+
+  React.useEffect(() => {
+    const user = auth.currentUser;
+    if (!user) return;
+    const db = getFirestore();
+    getDoc(doc(db, 'users', user.uid)).then((snap) => {
+      if (!snap.exists()) return;
+      const data = snap.data();
+      const fullName = `${data?.firstName || ''} ${data?.lastName || ''}`.trim();
+      const name = data?.agentName || data?.name || fullName || data?.email || 'Agent';
+      setCurrentUserName(name);
+      const photo = data?.profilePhoto || data?.profilePic || data?.photo || data?.avatarUrl || null;
+      setCurrentUserPhoto(photo);
+    }).catch(() => {});
+  }, []);
+
+  React.useEffect(() => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) {
+      setFollowedUserIds([]);
+      setFollowStates({});
+      return;
+    }
+
+    return onSnapshot(
+      collection(db, `users/${uid}/following`),
+      (snap) => {
+        const ids = snap.docs.map((docSnap) => docSnap.id);
+        const nextStates: Record<string, boolean> = {};
+        ids.forEach((id) => {
+          nextStates[id] = true;
+        });
+        setFollowedUserIds(ids);
+        setFollowStates((prev) => ({ ...prev, ...nextStates }));
+      },
+      () => {
+        setFollowedUserIds([]);
+        setFollowStates({});
+      }
+    );
+  }, []);
 
   React.useEffect(() => {
     setLoading(true);
@@ -257,9 +310,84 @@ export default function AgentFeedScreen() {
     };
   }, [refreshKey]);
 
+  const getAuthorAvatarUri = (item: any) => {
+    const candidate = item?.authorPhoto || item?.ownerPhoto || item?.profilePhoto || item?.profilePic || item?.photo || item?.avatarUrl;
+    return typeof candidate === 'string' && candidate.length > 0 ? candidate : null;
+  };
+
+  const visibleFeed = React.useMemo(() => {
+    if (activeFeedSector === 'general') return feed;
+    const followed = new Set(followedUserIds);
+    return feed.filter((post) => post.ownerId && followed.has(post.ownerId));
+  }, [activeFeedSector, feed, followedUserIds]);
+
+  const handleToggleFollow = async (item: any) => {
+    const targetUid = item.ownerId;
+    if (!targetUid) return;
+
+    const targetName = userNames[targetUid] || item.author || 'User';
+    const targetPhoto = item.authorPhoto || item.ownerPhoto || item.profilePhoto || item.profilePic || item.photo || item.avatarUrl || '';
+
+    setFollowStates((prev) => ({ ...prev, [targetUid]: !prev[targetUid] }));
+
+    if (!followAnim[targetUid]) {
+      followAnim[targetUid] = new Animated.Value(1);
+    }
+
+    if (!followStates[targetUid]) {
+      Animated.sequence([
+        Animated.timing(followAnim[targetUid], {
+          toValue: 1.15,
+          duration: 160,
+          useNativeDriver: true,
+        }),
+        Animated.timing(followAnim[targetUid], {
+          toValue: 1,
+          duration: 160,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    }
+
+    try {
+      const isFollowingNow = await toggleFollow(targetUid, item.ownerRole || 'player', targetName, targetPhoto);
+      setFollowStates((prev) => ({ ...prev, [targetUid]: isFollowingNow }));
+    } catch (error) {
+      setFollowStates((prev) => ({ ...prev, [targetUid]: !prev[targetUid] }));
+      console.error('Agent feed follow/unfollow error:', error);
+    }
+  };
+
   const handleRetry = () => {
     setRefreshKey((prev) => prev + 1);
   };
+
+  const switchFeedSectorBySwipe = React.useCallback((direction: 'left' | 'right') => {
+    setActiveFeedSector((current) => {
+      const currentIndex = feedSectors.indexOf(current);
+      if (currentIndex === -1) return current;
+      const nextIndex = direction === 'left'
+        ? Math.min(feedSectors.length - 1, currentIndex + 1)
+        : Math.max(0, currentIndex - 1);
+      return feedSectors[nextIndex] || current;
+    });
+  }, []);
+
+  const feedSwipeResponder = React.useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_, gestureState) =>
+        Math.abs(gestureState.dx) > 18 && Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.35,
+      onPanResponderRelease: (_, gestureState) => {
+        if (gestureState.dx <= -48) {
+          switchFeedSectorBySwipe('left');
+        } else if (gestureState.dx >= 48) {
+          switchFeedSectorBySwipe('right');
+        }
+      },
+    })
+  ).current;
+
+  const selectedCommentsPost = commentsPostId ? feed.find((p) => p.id === commentsPostId) : null;
 
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -267,7 +395,7 @@ export default function AgentFeedScreen() {
         colors={['#000000', '#1a1a1a', '#2d2d2d']}
         style={styles.gradient}
       >
-        <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
+        <Animated.View style={{ flex: 1, opacity: fadeAnim }} {...feedSwipeResponder.panHandlers}>
           {/* Header */}
           <View style={styles.header}>
             <TouchableOpacity style={styles.menuButton} onPress={openMenu}>
@@ -283,6 +411,39 @@ export default function AgentFeedScreen() {
 
       <HamburgerMenu />
 
+      {!loading && (
+        <View style={styles.feedSectorRow}>
+          <TouchableOpacity
+            style={[styles.feedSectorButton, activeFeedSector === 'general' && styles.feedSectorButtonActive]}
+            onPress={() => setActiveFeedSector('general')}
+            activeOpacity={0.85}
+          >
+            <Ionicons
+              name="globe-outline"
+              size={15}
+              color={activeFeedSector === 'general' ? '#111827' : '#d1d5db'}
+            />
+            <Text style={[styles.feedSectorText, activeFeedSector === 'general' && styles.feedSectorTextActive]}>
+              {i18n.t('generalFeed') || 'General'}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.feedSectorButton, activeFeedSector === 'following' && styles.feedSectorButtonActive]}
+            onPress={() => setActiveFeedSector('following')}
+            activeOpacity={0.85}
+          >
+            <Ionicons
+              name="people-outline"
+              size={15}
+              color={activeFeedSector === 'following' ? '#111827' : '#d1d5db'}
+            />
+            <Text style={[styles.feedSectorText, activeFeedSector === 'following' && styles.feedSectorTextActive]}>
+              {i18n.t('following') || 'Following'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       {loading ? (
             <View style={styles.loadingState}>
               <FootballLoader size="large" color="#fff" />
@@ -290,7 +451,7 @@ export default function AgentFeedScreen() {
             </View>
       ) : (
         <FlatList
-          data={feed}
+          data={visibleFeed}
               renderItem={({ item }: any) => {
                 const timestamp = item.timestamp?.seconds 
                   ? new Date(item.timestamp.seconds * 1000) 
@@ -300,6 +461,7 @@ export default function AgentFeedScreen() {
 
                 const userName = userNames[item.ownerId] || item.author || 'User';
                 const role = item.ownerRole || '';
+                const avatarUri = getAuthorAvatarUri(item);
 
                 // Initials from display name
                 const initials = userName.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
@@ -313,6 +475,8 @@ export default function AgentFeedScreen() {
                   agent:   { bg: '#eab308', text: '#000' },
                 };
                 const badge = roleBadgeColor[role] ?? { bg: '#555', text: '#fff' };
+                const canFollow = !!(item.ownerId && item.ownerRole !== 'admin' && auth.currentUser?.uid !== item.ownerId);
+                const isFollowing = !!followStates[item.ownerId];
 
                 const canViewProfile = !!(item.ownerId && item.ownerRole);
 
@@ -328,9 +492,7 @@ export default function AgentFeedScreen() {
                           params: { ownerId: item.ownerId, ownerRole: item.ownerRole, userName }
                         })}
                       >
-                        <View style={styles.initialsCircle}>
-                          <Text style={styles.initialsText}>{initials || '?'}</Text>
-                        </View>
+                        <FeedAuthorAvatar uri={avatarUri} name={userName} size={46} />
                         <View style={styles.stripNameCol}>
                           <Text style={styles.stripName} numberOfLines={1}>{userName}</Text>
                           {!!role && (
@@ -341,6 +503,19 @@ export default function AgentFeedScreen() {
                         </View>
                       </TouchableOpacity>
                       <View style={styles.stripRight}>
+                        {canFollow && (
+                          <Animated.View style={{ transform: [{ scale: followAnim[item.ownerId] || 1 }] }}>
+                            <TouchableOpacity
+                              style={[styles.followBtn, isFollowing ? styles.following : styles.notFollowing]}
+                              onPress={() => handleToggleFollow(item)}
+                              activeOpacity={0.85}
+                            >
+                              <Text style={[styles.followBtnText, isFollowing ? styles.followBtnTextFollowing : styles.followBtnTextDefault]}>
+                                {isFollowing ? (i18n.t('following') || 'Following') : (i18n.t('follow') || 'Follow')}
+                              </Text>
+                            </TouchableOpacity>
+                          </Animated.View>
+                        )}
                         {timestamp && (
                           <Text style={styles.stripDate}>
                             {timestamp.toLocaleDateString()}
@@ -365,6 +540,23 @@ export default function AgentFeedScreen() {
                     {!!item.content && (
                       <Text style={styles.feedContent}>{item.content}</Text>
                     )}
+
+                    {item.isRepost && (
+                      <View style={styles.repostBanner}>
+                        <Ionicons name="repeat-outline" size={13} color="#047857" />
+                        <Text style={styles.repostBannerText}>
+                          {i18n.t('repostedBy') || 'Reposted'}{item.originalAuthorName ? ` · ${item.originalAuthorName}` : ''}
+                        </Text>
+                      </View>
+                    )}
+
+                    <PostSocialActions
+                      post={item}
+                      onCommentPress={() => setCommentsPostId(item.id)}
+                      currentUserName={currentUserName}
+                      currentUserPhoto={currentUserPhoto}
+                      viewerRole="agent"
+                    />
 
                     {/* View profile footer */}
                     {canViewProfile && (
@@ -393,11 +585,26 @@ export default function AgentFeedScreen() {
               ListEmptyComponent={
                 <View style={styles.emptyState}>
                   <Ionicons name={errorMessage ? 'alert-circle-outline' : 'newspaper-outline'} size={64} color="#666" />
-                  <Text style={styles.emptyText}>{errorMessage || (i18n.t('noPosts') || 'No posts yet')}</Text>
-                  <Text style={styles.emptySubtext}>{errorMessage ? (i18n.t('tapToRetry') || 'Tap retry to try again.') : (i18n.t('beFirstToPost') || 'Be the first to share something!')}</Text>
+                  <Text style={styles.emptyText}>
+                    {errorMessage || (activeFeedSector === 'following'
+                      ? (i18n.t('noFollowingPosts') || 'No followed posts yet.')
+                      : (i18n.t('noPosts') || 'No posts yet'))}
+                  </Text>
+                  <Text style={styles.emptySubtext}>
+                    {errorMessage
+                      ? (i18n.t('tapToRetry') || 'Tap retry to try again.')
+                      : activeFeedSector === 'following'
+                        ? (i18n.t('followPeopleToSeePosts') || 'Follow people to build this feed.')
+                        : (i18n.t('beFirstToPost') || 'Be the first to share something!')}
+                  </Text>
                   {!!errorMessage && (
                     <TouchableOpacity style={styles.retryButton} onPress={handleRetry}>
                       <Text style={styles.retryButtonText}>{i18n.t('retry') || 'Retry'}</Text>
+                    </TouchableOpacity>
+                  )}
+                  {!errorMessage && activeFeedSector === 'following' && (
+                    <TouchableOpacity style={styles.retryButton} onPress={() => router.push('/agent-players' as any)}>
+                      <Text style={styles.retryButtonText}>{i18n.t('agentPlayers') || 'Players'}</Text>
                     </TouchableOpacity>
                   )}
     </View>
@@ -406,6 +613,17 @@ export default function AgentFeedScreen() {
           )}
         </Animated.View>
       </LinearGradient>
+
+      {commentsPostId && (
+        <CommentsSheet
+          postId={commentsPostId}
+          postOwnerId={selectedCommentsPost?.ownerId}
+          visible={!!commentsPostId}
+          onClose={() => setCommentsPostId(null)}
+          currentUserName={currentUserName}
+          currentUserPhoto={currentUserPhoto}
+        />
+      )}
 
       {/* Full Screen Media Viewer */}
       <Modal
@@ -493,6 +711,39 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingBottom: 40,
   },
+  feedSectorRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginHorizontal: 24,
+    marginBottom: 12,
+    padding: 4,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+  },
+  feedSectorButton: {
+    flex: 1,
+    height: 34,
+    borderRadius: 12,
+    backgroundColor: 'transparent',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  feedSectorButtonActive: {
+    backgroundColor: '#fff',
+    borderColor: '#fff',
+  },
+  feedSectorText: {
+    color: '#d1d5db',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  feedSectorTextActive: {
+    color: '#111827',
+  },
   feedCard: {
     backgroundColor: '#fff',
     borderRadius: 18,
@@ -519,24 +770,10 @@ const styles = StyleSheet.create({
     minWidth: 0,
     marginRight: 8,
   },
-  initialsCircle: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 11,
-    flexShrink: 0,
-  },
-  initialsText: {
-    color: '#fff',
-    fontSize: 17,
-    fontWeight: '800',
-  },
   stripNameCol: {
     flex: 1,
     minWidth: 0,
+    marginLeft: 11,
   },
   stripName: {
     color: '#fff',
@@ -558,6 +795,34 @@ const styles = StyleSheet.create({
   stripRight: {
     alignItems: 'flex-end',
     flexShrink: 0,
+    gap: 6,
+  },
+  followBtn: {
+    minWidth: 78,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    borderWidth: 1,
+  },
+  following: {
+    backgroundColor: '#ecfdf5',
+    borderColor: '#10b981',
+  },
+  notFollowing: {
+    backgroundColor: '#fff',
+    borderColor: '#d1d5db',
+  },
+  followBtnText: {
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  followBtnTextDefault: {
+    color: '#111827',
+  },
+  followBtnTextFollowing: {
+    color: '#065f46',
   },
   stripDate: {
     fontSize: 11,
@@ -571,6 +836,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 12,
     paddingBottom: 4,
+  },
+  repostBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: 8,
+    paddingHorizontal: 16,
+  },
+  repostBannerText: {
+    fontSize: 12,
+    color: '#047857',
+    fontWeight: '600',
   },
   viewProfileRow: {
     flexDirection: 'row',

@@ -2,10 +2,11 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, TextInput } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { doc, getDoc, updateDoc } from 'firebase/firestore';
+import { doc, getDoc } from 'firebase/firestore';
 import { auth, db } from '../../../lib/firebase';
-import { addAdminNote, logAdminAction, subscribeAdminNotes } from '../../../services/AdminOpsService';
+import { addAdminNote, subscribeAdminNotes } from '../../../services/AdminOpsService';
 import FootballLoader from '../../../components/FootballLoader';
+import { suspendUser, unsuspendUser } from '../../../services/ModerationService';
 
 const resolveDisplayName = (user: any) => {
     const fullName = `${user?.firstName || ''} ${user?.lastName || ''}`.trim();
@@ -66,20 +67,15 @@ export default function UserDetails() {
             {
                 text: "Update", onPress: async () => {
                     try {
-                        const docRef = doc(db, 'users', id as string);
-                        await updateDoc(docRef, {
-                            status: newStatus,
-                            isSuspended: newStatus === 'suspended',
-                        });
+                        const adminId = auth.currentUser?.uid || '';
+
+                        if (newStatus === 'suspended') {
+                            await suspendUser(id as string, adminId, 'Your account has been suspended. Please contact the admin.');
+                        } else {
+                            await unsuspendUser(id as string, adminId, 'Your account has been reactivated. You can use the app again.');
+                        }
+
                         setUser((prev: any) => prev ? { ...prev, status: newStatus, isSuspended: newStatus === 'suspended' } : null);
-                        await logAdminAction({
-                            actionType: newStatus === 'suspended' ? 'user_suspended' : 'user_unsuspended',
-                            targetCollection: 'users',
-                            targetId: id as string,
-                            reason: `User status changed to ${newStatus}`,
-                            actorId: auth.currentUser?.uid,
-                            metadata: { newStatus },
-                        });
                     } catch (error) {
                         console.error("Error updating status:", error);
                         Alert.alert("Error", "Failed to update status");

@@ -34,6 +34,8 @@ export type AgentDirectoryEntry = {
   description: string;
   profilePic?: string;
   phone?: string;
+  isSuspended?: boolean;
+  status?: string;
   [key: string]: any;
 };
 
@@ -56,16 +58,21 @@ export async function fetchUserProfileByRole(userId: string, role?: string): Pro
   const collectionName = ROLE_COLLECTION_MAP[String(role || '').toLowerCase()] || 'users';
 
   try {
+    const userSnap = await getDoc(doc(db, 'users', userId));
+    const userData = userSnap.exists() ? (userSnap.data() as Record<string, any>) : {};
+
     if (collectionName !== 'users') {
       const roleSnap = await getDoc(doc(db, collectionName, userId));
       if (roleSnap.exists()) {
-        return roleSnap.data() as Record<string, any>;
+        return {
+          ...userData,
+          ...(roleSnap.data() as Record<string, any>),
+        };
       }
     }
 
-    const userSnap = await getDoc(doc(db, 'users', userId));
     if (userSnap.exists()) {
-      return userSnap.data() as Record<string, any>;
+      return userData;
     }
 
     return null;
@@ -195,9 +202,11 @@ export async function fetchAgentsPage(options?: {
 
   const snap = await getDocs(pageQuery);
   const docs = snap.docs;
+  const userSnapshots = await Promise.all(docs.map((agentDoc) => getDoc(doc(db, 'users', agentDoc.id))));
 
-  const items = docs.map((agentDoc) => {
+  const items = docs.map((agentDoc, index) => {
     const data = agentDoc.data() as Record<string, any>;
+    const userData = userSnapshots[index]?.exists() ? (userSnapshots[index].data() as Record<string, any>) : {};
     return {
       id: agentDoc.id,
       name: `${data.firstName || ''} ${data.lastName || ''}`.trim(),
@@ -205,6 +214,8 @@ export async function fetchAgentsPage(options?: {
       description: data.description || '',
       profilePic: data.profilePhoto || '',
       phone: data.phone || '',
+      isSuspended: userData?.isSuspended === true || String(userData?.status || '').toLowerCase() === 'suspended',
+      status: userData?.status || '',
       ...data,
     } as AgentDirectoryEntry;
   });

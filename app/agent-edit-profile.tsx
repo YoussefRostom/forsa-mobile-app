@@ -8,7 +8,6 @@ import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import i18n from '../locales/i18n';
 import { buildPersonDisplayName } from '../lib/userDisplayName';
-import { validatePhone } from '../lib/validations';
 import { auth, db } from '../lib/firebase';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { uploadMedia } from '../services/MediaService';
@@ -31,6 +30,8 @@ export default function AgentEditProfileScreen() {
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
   const [profilePhotoUrl, setProfilePhotoUrl] = useState<string | null>(null);
   const [initialProfileState, setInitialProfileState] = useState('');
+  const [initialEmail, setInitialEmail] = useState('');
+  const [initialPhone, setInitialPhone] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -86,6 +87,8 @@ export default function AgentEditProfileScreen() {
         setLastName(nextLastName);
         setEmail(nextEmail);
         setPhone(nextPhone);
+        setInitialEmail(nextEmail);
+        setInitialPhone(nextPhone);
         setAgency(nextAgency);
         setLicense(nextLicense);
         setDescription(nextDescription);
@@ -126,6 +129,8 @@ export default function AgentEditProfileScreen() {
           setLastName(nextLastName);
           setEmail(nextEmail);
           setPhone(nextPhone);
+          setInitialEmail(nextEmail);
+          setInitialPhone(nextPhone);
           setAgency(nextAgency);
           setLicense(nextLicense);
           setDescription(nextDescription);
@@ -181,17 +186,6 @@ export default function AgentEditProfileScreen() {
   };
 
   const handleSave = async () => {
-    // Only require phone number - other fields are optional
-    if (!phone || !phone.trim()) {
-      Alert.alert(i18n.t('error'), i18n.t('phoneRequired') || 'Phone number is required');
-      return;
-    }
-    const phoneValidationError = validatePhone(phone.trim());
-    if (phoneValidationError) {
-      Alert.alert(i18n.t('error'), phoneValidationError);
-      return;
-    }
-
     setSaving(true);
     try {
       const user = auth.currentUser;
@@ -218,7 +212,9 @@ export default function AgentEditProfileScreen() {
       }
 
       const updateData: any = {
-        phone: phone.trim(),
+        phone: initialPhone || null,
+        email: initialEmail || null,
+        emailLowercase: initialEmail.trim().toLowerCase() || null,
         updatedAt: new Date().toISOString(),
         username: buildPersonDisplayName(firstName, lastName) || 'Agent',
       };
@@ -226,7 +222,6 @@ export default function AgentEditProfileScreen() {
       // Only include optional fields if they have values
       if (firstName && firstName.trim()) updateData.firstName = firstName.trim();
       if (lastName && lastName.trim()) updateData.lastName = lastName.trim();
-      if (email && email.trim()) updateData.email = email.trim();
       if (agency && agency.trim()) updateData.agency = agency.trim();
       if (license && license.trim()) updateData.license = license.trim();
       if (description.trim()) updateData.description = description.trim();
@@ -241,11 +236,15 @@ export default function AgentEditProfileScreen() {
         setProfilePhoto(finalProfilePhotoUrl);
         setProfilePhotoUrl(finalProfilePhotoUrl);
       }
+      setEmail(initialEmail || '');
+      setPhone(initialPhone || '');
+      setInitialEmail(initialEmail || '');
+      setInitialPhone(initialPhone || '');
       setInitialProfileState(JSON.stringify({
         firstName: firstName.trim(),
         lastName: lastName.trim(),
-        email: email.trim(),
-        phone: phone.trim(),
+        email: initialEmail || '',
+        phone: initialPhone || '',
         agency: agency.trim(),
         license: license.trim(),
         description: description.trim(),
@@ -376,33 +375,24 @@ export default function AgentEditProfileScreen() {
 
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>{i18n.t('email')}</Text>
-                <View style={styles.inputWrapper}>
+                <View style={[styles.inputWrapper, styles.disabledInputWrapper]}>
                   <Ionicons name="mail-outline" size={20} color="#777" style={styles.inputIcon} />
-                  <TextInput
-                    style={styles.input}
-                    value={email}
-                    onChangeText={setEmail}
-                    placeholder={i18n.t('email')}
-                    placeholderTextColor="#999"
-                    keyboardType="email-address"
-                    autoCapitalize="none"
-                  />
+                  <Text style={styles.readOnlyValueText} selectable>
+                    {email || '-'}
+                  </Text>
                 </View>
+                <Text style={styles.phoneHelperText}>{i18n.t('signInEmailLockedHint') || 'Email changes are locked for now.'}</Text>
               </View>
 
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>{i18n.t('phone')}</Text>
                 <View style={[styles.inputWrapper, styles.disabledInputWrapper]}>
-                  <Ionicons name="call-outline" size={20} color="#bbb" style={styles.inputIcon} />
-                  <TextInput
-                    style={[styles.input, styles.disabledInput]}
-                    value={phone}
-                    editable={false}
-                    placeholder={i18n.t('phone')}
-                    placeholderTextColor="#bbb"
-                    keyboardType="phone-pad"
-                  />
+                  <Ionicons name="call-outline" size={20} color="#777" style={styles.inputIcon} />
+                  <Text style={styles.readOnlyValueText} selectable>
+                    {phone || '-'}
+                  </Text>
                 </View>
+                <Text style={styles.phoneHelperText}>{i18n.t('signInPhoneLockedHint') || 'Phone number changes are locked for now.'}</Text>
               </View>
 
               <Text style={styles.sectionTitle}>Professional</Text>
@@ -719,8 +709,11 @@ const styles = StyleSheet.create({
     borderColor: '#e5e7eb',
     opacity: 0.8,
   },
-  disabledInput: {
+  readOnlyValueText: {
+    flex: 1,
+    fontSize: 16,
     color: '#888',
+    paddingVertical: 16,
   },
   cityText: {
     flex: 1,
@@ -730,6 +723,11 @@ const styles = StyleSheet.create({
   },
   cityPlaceholder: {
     color: '#999',
+  },
+  phoneHelperText: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginTop: 8,
   },
   bioLabelRow: {
     flexDirection: 'row',

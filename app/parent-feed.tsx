@@ -1,13 +1,17 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import { collection, getFirestore, onSnapshot, orderBy, query, where } from 'firebase/firestore';
+import { collection, doc, getDoc, getFirestore, onSnapshot, orderBy, query, where } from 'firebase/firestore';
 import React, { useRef } from 'react';
 import { Animated, Easing, FlatList, Image, Platform, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import FootballLoader from '../components/FootballLoader';
 import HamburgerMenu from '../components/HamburgerMenu';
+import FloatingHamburgerButton from '../components/FloatingHamburgerButton';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
+import { useScrollAwareHeader } from '../hooks/useScrollAwareHeader';
 import PostActionsMenu from '../components/PostActionsMenu';
+import CommentsSheet from '../components/feed/CommentsSheet';
+import PostSocialActions from '../components/feed/PostSocialActions';
 import ZoomableFeedMedia from '../components/feed/ZoomableFeedMedia';
 import { auth } from '../lib/firebase';
 import i18n from '../locales/i18n';
@@ -102,8 +106,12 @@ export default function ParentFeedScreen() {
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const { onScroll: onScrollAware, floatingMenuAnim } = useScrollAwareHeader();
   const [parentPosts, setParentPosts] = React.useState<any[]>([]);
   const [adminPosts, setAdminPosts] = React.useState<any[]>([]);
+  const [commentsPostId, setCommentsPostId] = React.useState<string | null>(null);
+  const [currentUserName, setCurrentUserName] = React.useState<string>('');
+  const [currentUserPhoto, setCurrentUserPhoto] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     Animated.timing(fadeAnim, {
@@ -113,6 +121,21 @@ export default function ParentFeedScreen() {
       useNativeDriver: true,
     }).start();
   }, [fadeAnim]);
+
+  React.useEffect(() => {
+    const user = auth.currentUser;
+    if (!user) return;
+    const db = getFirestore();
+    getDoc(doc(db, 'users', user.uid)).then((snap) => {
+      if (!snap.exists()) return;
+      const data = snap.data();
+      const fullName = `${data?.firstName || ''} ${data?.lastName || ''}`.trim();
+      const name = data?.name || fullName || data?.email || 'Parent';
+      setCurrentUserName(name);
+      const photo = data?.profilePhoto || data?.profilePic || data?.photo || data?.avatarUrl || null;
+      setCurrentUserPhoto(photo);
+    }).catch(() => {});
+  }, []);
 
   const handleRefresh = React.useCallback(() => {
     setRefreshing(true);
@@ -315,9 +338,28 @@ export default function ParentFeedScreen() {
             {i18n.t('taggedInPost', { names: taggedNames.map((name: string) => `@${name}`).join(', ') }) || `Tagged: ${taggedNames.map((name: string) => `@${name}`).join(', ')}`}
           </Text>
         )}
+
+        {item.isRepost && (
+          <View style={styles.repostBanner}>
+            <Ionicons name="repeat-outline" size={13} color="#047857" />
+            <Text style={styles.repostBannerText}>
+              {i18n.t('repostedBy') || 'Reposted'}{item.originalAuthorName ? ` · ${item.originalAuthorName}` : ''}
+            </Text>
+          </View>
+        )}
+
+        <PostSocialActions
+          post={item}
+          onCommentPress={() => setCommentsPostId(item.id)}
+          currentUserName={currentUserName}
+          currentUserPhoto={currentUserPhoto}
+          viewerRole="parent"
+        />
       </View>
     );
   };
+
+  const selectedCommentsPost = commentsPostId ? feed.find((p) => p.id === commentsPostId) : null;
 
   return (
     <View style={styles.container}>
@@ -326,6 +368,7 @@ export default function ParentFeedScreen() {
         style={styles.gradient}
       >
         <HamburgerMenu />
+        <FloatingHamburgerButton onPress={openMenu} translateY={floatingMenuAnim} />
         <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
           {loading ? (
             <View style={styles.loadingContainer}>
@@ -351,6 +394,8 @@ export default function ParentFeedScreen() {
               keyExtractor={(item) => item.id}
               contentContainerStyle={styles.scrollContent}
               showsVerticalScrollIndicator={false}
+              onScroll={onScrollAware}
+              scrollEventThrottle={16}
               refreshControl={
                 <RefreshControl
                   refreshing={refreshing}
@@ -421,6 +466,17 @@ export default function ParentFeedScreen() {
           )}
         </Animated.View>
       </LinearGradient>
+
+      {commentsPostId && (
+        <CommentsSheet
+          postId={commentsPostId}
+          postOwnerId={selectedCommentsPost?.ownerId}
+          visible={!!commentsPostId}
+          onClose={() => setCommentsPostId(null)}
+          currentUserName={currentUserName}
+          currentUserPhoto={currentUserPhoto}
+        />
+      )}
     </View>
   );
 }
@@ -721,6 +777,17 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#1d4ed8',
     marginTop: 8,
+    fontWeight: '600',
+  },
+  repostBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: 8,
+  },
+  repostBannerText: {
+    fontSize: 12,
+    color: '#047857',
     fontWeight: '600',
   },
   mediaContainer: {

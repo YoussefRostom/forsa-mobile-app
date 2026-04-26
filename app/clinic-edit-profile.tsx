@@ -38,6 +38,8 @@ export default function ClinicEditProfileScreen() {
   const [saving, setSaving] = useState(false);
   const [state, setState] = useState<ClinicProfileState>(initialState);
   const [initialSnapshot, setInitialSnapshot] = useState<string>('');
+  const [initialEmail, setInitialEmail] = useState('');
+  const [initialPhone, setInitialPhone] = useState('');
 
   const setField = (key: keyof ClinicProfileState, value: string) => setState((prev) => ({ ...prev, [key]: value }));
 
@@ -61,6 +63,8 @@ export default function ClinicEditProfileScreen() {
         };
         setState(nextState);
         setInitialSnapshot(JSON.stringify(nextState));
+        setInitialEmail(nextState.email);
+        setInitialPhone(nextState.phone);
       } catch (e: any) {
         Alert.alert(i18n.t('error') || 'Error', e?.message || (i18n.t('couldNotLoadData') || 'Could not load clinic data.'));
       } finally {
@@ -112,7 +116,9 @@ export default function ClinicEditProfileScreen() {
       const payload = {
         clinicName: state.clinicName.trim(),
         username: resolveUserDisplayName({ clinicName: state.clinicName }, 'Clinic'),
-        email: state.email.trim() || null,
+        email: initialEmail || null,
+        emailLowercase: initialEmail.trim().toLowerCase() || null,
+        phone: initialPhone || null,
         description: state.description.trim(),
         contactPerson: state.contactPerson.trim() || null,
         profilePhoto: profilePhotoUrl || null,
@@ -122,9 +128,16 @@ export default function ClinicEditProfileScreen() {
       await safeUpdate('clinics', uid, payload);
       await safeUpdate('users', uid, payload);
 
-      const next = { ...state, profilePhoto: profilePhotoUrl || '' };
+      const next = {
+        ...state,
+        email: initialEmail || '',
+        phone: initialPhone || '',
+        profilePhoto: profilePhotoUrl || '',
+      };
       setState(next);
       setInitialSnapshot(JSON.stringify(next));
+      setInitialEmail(next.email);
+      setInitialPhone(next.phone);
       Alert.alert(i18n.t('success') || 'Success', i18n.t('profileUpdated') || 'Profile updated!');
     } catch (e: any) {
       Alert.alert(i18n.t('error') || 'Error', e?.message || 'Failed to update profile');
@@ -176,14 +189,10 @@ export default function ClinicEditProfileScreen() {
             <Text style={styles.sectionHeading}>{i18n.t('basicInformation') || 'Basic information'}</Text>
 
             <InputField label={i18n.t('clinicNameLabel') || 'Clinic Name'} value={state.clinicName} onChangeText={(v) => setField('clinicName', v)} />
-            <InputField label={i18n.t('email') || 'Email'} value={state.email} onChangeText={(v) => setField('email', v)} keyboardType="email-address" />
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>{i18n.t('phone') || 'Phone'}</Text>
-              <View style={[styles.inputWrapper, styles.disabledInputWrapper]}>
-                <Ionicons name="call-outline" size={20} color="#bbb" style={styles.inputIcon} />
-                <Text style={styles.readOnlyValueText}>{state.phone || '-'}</Text>
-              </View>
-            </View>
+            <InputField label={i18n.t('email') || 'Email'} value={state.email} onChangeText={(v) => setField('email', v)} keyboardType="email-address" editable={false} />
+            <Text style={styles.contactHint}>{i18n.t('signInEmailLockedHint') || 'Email changes are locked for now.'}</Text>
+            <InputField label={i18n.t('phone') || 'Phone'} value={state.phone} onChangeText={(v) => setField('phone', v)} keyboardType="phone-pad" editable={false} />
+            <Text style={styles.contactHint}>{i18n.t('signInPhoneLockedHint') || 'Phone number changes are locked for now.'}</Text>
             <InputField label={i18n.t('description') || 'Description'} value={state.description} onChangeText={(v) => setField('description', v)} multiline />
             <InputField label={i18n.t('contactPerson') || 'Contact'} value={state.contactPerson} onChangeText={(v) => setField('contactPerson', v)} />
 
@@ -220,25 +229,28 @@ function InputField({
   onChangeText,
   keyboardType,
   multiline,
+  editable = true,
 }: {
   label: string;
   value: string;
   onChangeText: (v: string) => void;
   keyboardType?: 'default' | 'email-address' | 'numeric' | 'phone-pad';
   multiline?: boolean;
+  editable?: boolean;
 }) {
   return (
     <View style={styles.inputGroup}>
       <Text style={styles.label}>{label}</Text>
-      <View style={styles.inputWrapper}>
+      <View style={[styles.inputWrapper, !editable && styles.disabledInputWrapper]}>
         <TextInput
-          style={[styles.input, multiline && styles.inputMultiline]}
+          style={[styles.input, multiline && styles.inputMultiline, !editable && styles.disabledInput]}
           value={value}
           onChangeText={onChangeText}
           placeholder={label}
           placeholderTextColor="#999"
           keyboardType={keyboardType || 'default'}
           multiline={multiline}
+          editable={editable}
         />
       </View>
     </View>
@@ -265,11 +277,11 @@ const styles = StyleSheet.create({
   inputGroup: { marginBottom: 12 },
   label: { fontSize: 13, color: '#374151', fontWeight: '600', marginBottom: 6 },
   inputWrapper: { borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 12, backgroundColor: '#f9fafb', paddingHorizontal: 12 },
-  inputIcon: { marginTop: 11 },
+  disabledInputWrapper: { backgroundColor: '#f3f4f6' },
   input: { color: '#111827', minHeight: 44, fontSize: 15 },
+  disabledInput: { color: '#6b7280' },
   inputMultiline: { minHeight: 72, textAlignVertical: 'top', paddingTop: 10 },
-  disabledInputWrapper: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#f3f4f6' },
-  readOnlyValueText: { color: '#6b7280', fontSize: 15, paddingVertical: 11, marginLeft: 8 },
+  contactHint: { color: '#6b7280', fontSize: 12, marginTop: -4, marginBottom: 12 },
   linkButton: { backgroundColor: '#111827', borderRadius: 12, minHeight: 46, alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
   linkButtonText: { color: '#fff', fontWeight: '700', fontSize: 15 },
   unsavedBanner: { marginTop: 4, marginBottom: 10, paddingVertical: 8, paddingHorizontal: 10, borderRadius: 10, backgroundColor: '#ffedd5', flexDirection: 'row', gap: 8, alignItems: 'center' },

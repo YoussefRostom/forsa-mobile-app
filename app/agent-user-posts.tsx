@@ -1,679 +1,937 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter, useLocalSearchParams } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import { collection, onSnapshot, query, where, orderBy } from 'firebase/firestore';
-import React, { useRef, useState, useEffect } from 'react';
-import { Animated, Easing, FlatList, Image, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { Video, ResizeMode } from 'expo-av';
-import HamburgerMenu from '../components/HamburgerMenu';
-import PostActionsMenu from '../components/PostActionsMenu';
-import i18n from '../locales/i18n';
-import { db, auth } from '../lib/firebase';
-import { fetchUserProfileByRole } from '../services/AgentDataService';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { collection, doc, getDoc, onSnapshot, orderBy, query, where } from 'firebase/firestore';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Animated,
+  Dimensions,
+  Easing,
+  FlatList,
+  Image,
+  Modal,
+  PanResponder,
+  Platform,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import FootballLoader from '../components/FootballLoader';
+import CommentsSheet from '../components/feed/CommentsSheet';
+import FeedVideoPreview from '../components/feed/FeedVideoPreview';
+import PostRecentCommentsPreview from '../components/feed/PostRecentCommentsPreview';
+import PostSocialActions from '../components/feed/PostSocialActions';
+import ZoomableFeedMedia from '../components/feed/ZoomableFeedMedia';
+import PostActionsMenu from '../components/PostActionsMenu';
+import { auth, db } from '../lib/firebase';
+import { fetchUserProfileByRole } from '../services/AgentDataService';
+import { toggleFollow } from '../services/FollowService';
 
-function getAge(dob?: string): number | null {
-  if (!dob) return null;
-  const parts = dob.split('-');
-  if (parts.length !== 3) return null;
-  // Support ISO (yyyy-mm-dd) and legacy (dd-mm-yyyy)
-  const year = parts[0].length === 4
-    ? parseInt(parts[0], 10)
-    : parseInt(parts[2], 10);
-  if (isNaN(year) || year < 1900 || year > new Date().getFullYear()) return null;
-  return new Date().getFullYear() - year;
-}
+import i18n from '../locales/i18n';
+import SuspendedBadge from '../components/SuspendedBadge';
+import { isSuspendedEntity } from '../lib/suspension';
 
-const getPositionLabel = (pos: string) => i18n.locale === 'ar' && i18n.t(`positions.${pos}`) ? i18n.t(`positions.${pos}`) : pos;
-const getCityLabel = (cityKey: string) => cityKey ? (i18n.t(`cities.${cityKey}`) || cityKey) : '';
+const SCREEN_WIDTH = Dimensions.get('window').width;
+const GRID_GAP = 2;
+const GRID_ITEM_SIZE = Math.floor((SCREEN_WIDTH - GRID_GAP * 2) / 3);
+
+const formatCount = (value: number) => {
+  if (value >= 1000000) return `${(value / 1000000).toFixed(1)}M`;
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}K`;
+  return String(value);
+};
+
+const getTimestamp = (post: any) => post?.pinnedAt?.seconds || post?.timestamp?.seconds || post?.createdAt?.seconds || 0;
+
+const sortProfilePosts = (items: any[]) => [...items].sort((a, b) => {
+  const pinnedDiff = Number(!!b.isPinned) - Number(!!a.isPinned);
+  if (pinnedDiff !== 0) return pinnedDiff;
+  return getTimestamp(b) - getTimestamp(a);
+});
+
+const isRepostEntry = (post: any) => Boolean(
+  post?.isRepost ||
+  post?.originalPostId ||
+  post?.repostedAt
+);
+
+const getInitials = (name: string) => (
+  name.trim().split(/\s+/).slice(0, 2).map((part) => part.charAt(0).toUpperCase()).join('') || 'U'
+);
+
+const getDisplayName = (profile: any, fallback: string) => {
+  const full = `${profile?.firstName || ''} ${profile?.lastName || ''}`.trim();
+  return profile?.name || profile?.displayName || full || fallback || 'Player';
+};
+
+const getHandle = (profile: any, name: string) => (
+  profile?.username || String(name || 'player').toLowerCase().replace(/[^a-z0-9_]+/gi, '')
+);
+
+const getCityLabel = (cityKey: string) => {
+  const key = String(cityKey || '').trim();
+  if (!key) return '';
+  const translated = String(i18n.t(`cities.${key}`));
+  return translated && translated !== `cities.${key}` ? translated : key;
+};
+
+const getPositionLabel = (positionKey: string) => {
+  const key = String(positionKey || '').trim();
+  if (!key) return '';
+  const translated = String(i18n.t(`positions.${key}`));
+  return translated && translated !== `positions.${key}` ? translated : key;
+};
+
+const getAgeFromDob = (dob?: string) => {
+  const value = String(dob || '').trim();
+  if (!value) return null;
+  const parts = value.split(/[-/]/).map((part) => parseInt(part, 10));
+  if (parts.length !== 3 || parts.some(Number.isNaN)) return null;
+
+  const year = parts[0] > 1900 ? parts[0] : parts[2];
+  const month = parts[1];
+  const day = parts[0] > 1900 ? parts[2] : parts[0];
+  const dobDate = new Date(year, month - 1, day);
+  if (Number.isNaN(dobDate.getTime())) return null;
+
+  const today = new Date();
+  let age = today.getFullYear() - year;
+  const hasHadBirthday =
+    today.getMonth() > dobDate.getMonth() ||
+    (today.getMonth() === dobDate.getMonth() && today.getDate() >= dobDate.getDate());
+  if (!hasHadBirthday) age -= 1;
+  return age >= 0 ? age : null;
+};
+
+const getPostDateLabel = (post: any) => {
+  const raw = post?.timestamp || post?.createdAt || post?.pinnedAt;
+  const date = raw?.toDate ? raw.toDate() : raw?.seconds ? new Date(raw.seconds * 1000) : null;
+  return date ? date.toLocaleDateString() : '';
+};
+
+import { ActionSheetIOS, Alert } from 'react-native';
+// import { blockUser, unblockUser } from '../services/BlockService';
 
 export default function AgentUserPostsScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ ownerId: string; ownerRole: string; userName: string }>();
-  const [posts, setPosts] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [profileData, setProfileData] = useState<any>(null);
-  const [loadingProfile, setLoadingProfile] = useState(true);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [refreshKey, setRefreshKey] = useState(0);
-  const [fullScreenMedia, setFullScreenMedia] = useState<{ uri: string; type: 'image' | 'video' } | null>(null);
+  const params = useLocalSearchParams<{ ownerId: string; ownerRole: string; userName: string; focusPostId?: string }>();
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const [posts, setPosts] = useState<any[]>([]);
+  const [profileData, setProfileData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadingProfile, setLoadingProfile] = useState(true);
+  const [followersCount, setFollowersCount] = useState(0);
+  const [followingCount, setFollowingCount] = useState(0);
+  const [isFollowing, setIsFollowing] = useState(false);
+  const [activeTab, setActiveTab] = useState<'posts' | 'videos' | 'reposts'>('posts');
+  const [selectedPostId, setSelectedPostId] = useState<string | null>(null);
+  const [menuVisible, setMenuVisible] = useState(false);
+  const [commentsPostId, setCommentsPostId] = useState<string | null>(null);
+  const [currentUserName, setCurrentUserName] = useState('');
+  const [currentUserPhoto, setCurrentUserPhoto] = useState<string | null>(null);
+  const [currentUserRole, setCurrentUserRole] = useState('player');
+  const profileTabs: Array<'posts' | 'videos' | 'reposts'> = ['posts', 'videos', 'reposts'];
+  // Block state removed
+
+  // Show action sheet for report only
+  const showMoreMenu = () => {
+    const options = [i18n.t('cancel') || 'Cancel', i18n.t('reportUser') || 'Report User'];
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          options,
+          destructiveButtonIndex: 1,
+          cancelButtonIndex: 0,
+          userInterfaceStyle: 'dark',
+        },
+        (buttonIndex) => {
+          if (buttonIndex === 1) handleReportUser();
+        }
+      );
+    } else {
+      setMenuVisible(true);
+    }
+  };
+
+
+  const handleReportUser = () => {
+    Alert.alert(i18n.t('reportUser') || 'Report User', i18n.t('reportUserDesc') || 'This will flag the user for review.', [
+      { text: i18n.t('cancel') || 'Cancel', style: 'cancel' },
+      { text: i18n.t('report') || 'Report', style: 'destructive', onPress: () => {/* TODO: Implement actual report logic */} },
+    ]);
+  };
+
+
+
+
+  const ownerId = String(params.ownerId || '');
+  const ownerRole = String(params.ownerRole || 'player').toLowerCase();
 
   useEffect(() => {
     Animated.timing(fadeAnim, {
       toValue: 1,
-      duration: 600,
+      duration: 450,
       easing: Easing.out(Easing.exp),
       useNativeDriver: true,
     }).start();
   }, [fadeAnim]);
 
   useEffect(() => {
-    setErrorMessage(null);
-
-    if (!params.ownerId) {
-      setLoading(false);
-      setLoadingProfile(false);
-      return;
-    }
-
-    // Check if user is authenticated before setting up listener
     const user = auth.currentUser;
-    if (!user) {
+    if (!user) return;
+
+    getDoc(doc(db, 'users', user.uid))
+      .then((snap) => {
+        if (!snap.exists()) return;
+        const data = snap.data();
+        const fullName = `${data?.firstName || ''} ${data?.lastName || ''}`.trim();
+        const name = data?.username || data?.name || fullName || data?.email || 'User';
+        setCurrentUserName(name);
+        setCurrentUserPhoto(data?.profilePhoto || data?.profilePic || data?.photo || null);
+        setCurrentUserRole(String(data?.role || 'player').toLowerCase());
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!ownerId || !auth.currentUser) {
       setLoading(false);
       setLoadingProfile(false);
-      setPosts([]);
-      setProfileData(null);
       return;
     }
 
-    // Fetch user profile data
-    const fetchProfile = async () => {
-      setLoadingProfile(true);
-      try {
-        // Check authentication again before fetching
-        if (!auth.currentUser) {
-          setProfileData(null);
-          return;
-        }
-        const data = await fetchUserProfileByRole(params.ownerId, params.ownerRole || 'player');
-        setProfileData(data);
-      } catch (error) {
-        // Only log error if user is still authenticated
-        if (auth.currentUser) {
-          console.error('Error fetching profile:', error);
-        }
-        setProfileData(null);
-        setErrorMessage(i18n.t('failedToLoadProfile') || 'Failed to load profile. Please try again.');
-      } finally {
-        setLoadingProfile(false);
-      }
-    };
-    fetchProfile();
+    setLoadingProfile(true);
+    fetchUserProfileByRole(ownerId, ownerRole)
+      .then(setProfileData)
+      .catch(() => setProfileData(null))
+      .finally(() => setLoadingProfile(false));
 
-    // Fetch posts
-    setLoading(true);
     const postsRef = collection(db, 'posts');
-    
-    // Query posts by ownerId only (without status filter to avoid composite index requirement)
-    // We'll filter by status client-side
-    const q = query(
-      postsRef,
-      where('ownerId', '==', params.ownerId),
-      orderBy('timestamp', 'desc')
-    );
+    const q = query(postsRef, where('ownerId', '==', ownerId), orderBy('timestamp', 'desc'));
+    const unsubPosts = onSnapshot(q, (snap) => {
+      const list = snap.docs
+        .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
+        .filter((post: any) => !post.status || post.status === 'active');
+      setPosts(list);
+      setLoading(false);
+    }, () => {
+      setPosts([]);
+      setLoading(false);
+    });
 
-    // Set up real-time listener
-    const unsubscribe = onSnapshot(
-      q,
-      (querySnapshot) => {
-        // Check authentication before processing
-        if (!auth.currentUser) {
-          setPosts([]);
-          setLoading(false);
-          return;
-        }
-        
-        const userPosts = querySnapshot.docs
-          .map(doc => ({ 
-            id: doc.id, 
-            ...doc.data() 
-          }))
-          // Filter out deleted/inactive posts client-side
-          .filter((post: any) => !post.status || post.status === 'active');
-        setPosts(userPosts);
-        setLoading(false);
-      },
-      (error) => {
-        // Check if error is due to permissions (user logged out)
-        if (error.code === 'permission-denied' || error.message?.includes('permission')) {
-          // Silently handle permission errors (user likely logged out)
-          setPosts([]);
-          setLoading(false);
-          return;
-        }
-        console.error('Error fetching user posts:', error);
-        setPosts([]);
-        setErrorMessage(i18n.t('failedToLoadPosts') || 'Failed to load posts. Please try again.');
-        setLoading(false);
-      }
-    );
+    const unsubFollowers = onSnapshot(collection(db, `users/${ownerId}/followers`), (snap) => {
+      setFollowersCount(snap.size);
+    }, () => setFollowersCount(0));
 
-    return () => unsubscribe();
-  }, [params.ownerId, params.ownerRole, refreshKey]);
+    const unsubFollowing = onSnapshot(collection(db, `users/${ownerId}/following`), (snap) => {
+      setFollowingCount(snap.size);
+    }, () => setFollowingCount(0));
 
-  const handleRetry = () => {
-    setRefreshKey((prev) => prev + 1);
+    const currentUid = auth.currentUser?.uid;
+    const unsubFollowState = currentUid && currentUid !== ownerId
+      ? onSnapshot(doc(db, `users/${currentUid}/following/${ownerId}`), (snap) => setIsFollowing(snap.exists()), () => setIsFollowing(false))
+      : () => {};
+
+    return () => {
+      unsubPosts();
+      unsubFollowers();
+      unsubFollowing();
+      unsubFollowState();
+    };
+  }, [ownerId, ownerRole]);
+
+  const displayName = getDisplayName(profileData, String(params.userName || 'Player'));
+  const handle = getHandle(profileData, displayName);
+  const photo = profileData?.profilePhoto || profileData?.profilePic || profileData?.photo || null;
+  const bio = profileData?.description || profileData?.bio || '';
+  const city = getCityLabel(profileData?.city || '');
+  const playerPosition = ownerRole === 'player' ? getPositionLabel(profileData?.position || '') : '';
+  const playerAge = ownerRole === 'player' ? getAgeFromDob(profileData?.dob) : null;
+  const profileSuspended = isSuspendedEntity(profileData);
+  const visiblePosts = useMemo(() => {
+    if (activeTab === 'videos') {
+      return sortProfilePosts(posts.filter((post: any) => !isRepostEntry(post) && post.mediaType === 'video'));
+    }
+    if (activeTab === 'reposts') {
+      return sortProfilePosts(posts.filter((post: any) => isRepostEntry(post)));
+    }
+    return sortProfilePosts(posts.filter((post: any) => !isRepostEntry(post)));
+  }, [activeTab, posts]);
+  const selectedPost = selectedPostId ? visiblePosts.find((post: any) => post.id === selectedPostId) || null : null;
+  const detailPosts = useMemo(() => {
+    if (!selectedPostId) return [];
+    const startIndex = visiblePosts.findIndex((post: any) => post.id === selectedPostId);
+    return startIndex >= 0 ? visiblePosts.slice(startIndex) : visiblePosts;
+  }, [selectedPostId, visiblePosts]);
+  const selectedCommentsPost = commentsPostId
+    ? visiblePosts.find((post: any) => post.id === commentsPostId) || posts.find((post: any) => post.id === commentsPostId) || null
+    : null;
+
+  useEffect(() => {
+    if (!params.focusPostId || !posts.length) return;
+    const match = posts.find((post: any) => post.id === params.focusPostId || post.originalPostId === params.focusPostId);
+    if (!match) return;
+    setActiveTab(isRepostEntry(match) ? 'reposts' : match.mediaType === 'video' ? 'videos' : 'posts');
+    setSelectedPostId(match.id);
+  }, [params.focusPostId, posts]);
+
+  const handleToggleFollow = async () => {
+    if (!ownerId || ownerId === auth.currentUser?.uid) return;
+    setIsFollowing((prev) => !prev);
+    try {
+      await toggleFollow(ownerId, ownerRole, displayName, photo || '');
+    } catch (error) {
+      setIsFollowing((prev) => !prev);
+      console.error('[PublicProfile] Follow toggle failed:', error);
+    }
   };
 
-  const playerName = profileData?.firstName
-    ? `${profileData.firstName} ${profileData.lastName || ''}`.trim()
-    : (params.userName || 'Player');
+  const handleMessage = () => {
+    if (!ownerId || ownerId === auth.currentUser?.uid) return;
+    router.push({
+      pathname: '/player-chat',
+      params: { otherUserId: ownerId, name: displayName },
+    } as any);
+  };
 
-  const mediaPosts = posts.filter((p: any) => !!p.mediaUrl);
+  const switchProfileTabBySwipe = React.useCallback((direction: 'left' | 'right') => {
+    setActiveTab((current) => {
+      const currentIndex = profileTabs.indexOf(current);
+      if (currentIndex === -1) return current;
+      const nextIndex = direction === 'left'
+        ? Math.min(profileTabs.length - 1, currentIndex + 1)
+        : Math.max(0, currentIndex - 1);
+      return profileTabs[nextIndex] || current;
+    });
+  }, []);
+
+  const profileSwipeResponder = React.useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_, gestureState) =>
+        Math.abs(gestureState.dx) > 18 && Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.35,
+      onPanResponderRelease: (_, gestureState) => {
+        if (gestureState.dx <= -48) {
+          switchProfileTabBySwipe('left');
+        } else if (gestureState.dx >= 48) {
+          switchProfileTabBySwipe('right');
+        }
+      },
+    })
+  ).current;
+
+  const renderPostTile = ({ item }: { item: any }) => {
+    const isVideo = item.mediaType === 'video';
+    return (
+      <TouchableOpacity
+        activeOpacity={0.9}
+        style={styles.gridItem}
+        onPress={() => setSelectedPostId(item.id)}
+      >
+        {isVideo ? (
+          <FeedVideoPreview uri={item.mediaUrl} style={styles.videoGridTile} iconSize={24} />
+        ) : item.mediaUrl ? (
+          <Image source={{ uri: item.mediaUrl }} style={styles.gridMedia} />
+        ) : (
+          <View style={styles.gridTextFallback}>
+            <Text style={styles.gridTextFallbackText} numberOfLines={5}>{item.content || 'Post'}</Text>
+          </View>
+        )}
+        {item.isPinned && (
+          <View style={styles.pinBadge}>
+            <Ionicons name="pin" size={18} color="#fff" />
+          </View>
+        )}
+        {isVideo && (
+          <View style={styles.videoBadge}>
+            <Ionicons name="play" size={13} color="#fff" />
+          </View>
+        )}
+      </TouchableOpacity>
+    );
+  };
+
+  const renderDetailPost = ({ item }: { item: any }) => {
+    const timestampLabel = getPostDateLabel(item);
+    const initials = getInitials(displayName);
+
+    return (
+      <View style={styles.detailPostCard}>
+        <View style={styles.detailPostHeader}>
+          <View style={styles.detailAuthorRow}>
+            {photo ? (
+              <Image source={{ uri: photo }} style={styles.detailAvatar} />
+            ) : (
+              <View style={styles.detailAvatarFallback}>
+                <Text style={styles.detailAvatarInitials}>{initials}</Text>
+              </View>
+            )}
+            <View style={styles.detailAuthorText}>
+              <Text style={styles.detailAuthorName}>{displayName}</Text>
+              {!!timestampLabel && <Text style={styles.detailPostDate}>{timestampLabel}</Text>}
+            </View>
+          </View>
+          <PostActionsMenu
+            postId={item.id}
+            postOwnerId={item.ownerId}
+            postOwnerRole={item.ownerRole}
+            mediaUrl={item.mediaUrl}
+            mediaType={item.mediaType}
+            contentText={item.content}
+            postTimestamp={item.timestamp || item.createdAt}
+          />
+        </View>
+
+        <ZoomableFeedMedia post={item} />
+
+        <PostSocialActions
+          post={item}
+          onCommentPress={() => setCommentsPostId(item.id)}
+          currentUserName={currentUserName}
+          currentUserPhoto={currentUserPhoto}
+          viewerRole={currentUserRole}
+        />
+
+        {!!item.content && (
+          <View style={styles.detailCaptionWrap}>
+            <Text style={styles.detailCaptionName}>{displayName}</Text>
+            <Text style={styles.detailCaptionText}>{item.content}</Text>
+          </View>
+        )}
+
+        <PostRecentCommentsPreview
+          postId={item.id}
+          onPressOpenComments={() => setCommentsPostId(item.id)}
+        />
+
+        {item.isRepost && (
+          <View style={styles.detailRepostBadge}>
+            <Ionicons name="repeat-outline" size={13} color="#34d399" />
+            <Text style={styles.detailRepostText}>
+              {i18n.t('repostedBy') || 'Reposted'}{item.originalAuthorName ? ` · ${item.originalAuthorName}` : ''}
+            </Text>
+          </View>
+        )}
+      </View>
+    );
+  };
+
+  if (loading || loadingProfile) {
+    return (
+      <View style={styles.loaderWrap}>
+        <FootballLoader size="large" color="#fff" />
+      </View>
+    );
+  }
+
+
 
   return (
-    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <LinearGradient colors={['#000000', '#1a1a1a', '#2d2d2d']} style={styles.gradient}>
-        <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
-
-          {/* Header */}
-          <View style={styles.header}>
-            <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-              <Ionicons name="arrow-back" size={24} color="#fff" />
-            </TouchableOpacity>
-            <Text style={styles.headerTitle} numberOfLines={1}>{playerName}</Text>
-          </View>
-
-          <HamburgerMenu />
-
-          {(loading || loadingProfile) ? (
-            <View style={styles.loadingState}>
-              <FootballLoader size="large" color="#fff" />
-              <Text style={styles.loadingText}>{i18n.t('loading') || 'Loading...'}</Text>
-            </View>
-          ) : (
-            <FlatList
-              data={posts}
-              keyExtractor={(item: any) => item.id}
-              showsVerticalScrollIndicator={false}
-              contentContainerStyle={styles.listContent}
-              ListHeaderComponent={
-                <>
-                  {/* Player hero card */}
-                  {params.ownerRole === 'player' && profileData && (
-                    <View style={styles.heroCard}>
-                      {/* Dark strip with photo */}
-                      <View style={styles.heroStrip}>
-                        {profileData.profilePhoto ? (
-                          <Image source={{ uri: profileData.profilePhoto }} style={styles.heroPhoto} />
-                        ) : (
-                          <View style={styles.heroPhotoPlaceholder}>
-                            <Ionicons name="person" size={44} color="rgba(255,255,255,0.4)" />
-                          </View>
-                        )}
-                      </View>
-                      {/* White body */}
-                      <View style={styles.heroBody}>
-                        <Text style={styles.heroName}>{profileData.firstName || ''} {profileData.lastName || ''}</Text>
-                        <View style={styles.heroBadgeRow}>
-                          {!!profileData.position && (
-                            <View style={styles.heroBadge}>
-                              <Text style={styles.heroBadgeText}>{getPositionLabel(profileData.position)}</Text>
-                            </View>
-                          )}
-                          {getAge(profileData.dob) !== null && (
-                            <View style={[styles.heroBadge, styles.heroBadgeAlt]}>
-                              <Text style={[styles.heroBadgeText, styles.heroBadgeAltText]}>{getAge(profileData.dob)} {i18n.t('yrs') || 'yrs'}</Text>
-                            </View>
-                          )}
-                        </View>
-                        {!!profileData.city && (
-                          <View style={styles.heroLocationRow}>
-                            <Ionicons name="location" size={14} color="#888" />
-                            <Text style={styles.heroCity}>{getCityLabel(profileData.city)}</Text>
-                          </View>
-                        )}
-                        {!!profileData.description && (
-                          <Text style={styles.heroBio} numberOfLines={3}>{profileData.description}</Text>
-                        )}
-                      </View>
-                    </View>
-                  )}
-
-                  {/* Footage filmstrip */}
-                  {mediaPosts.length > 0 && (
-                    <View style={styles.footageSection}>
-                      <View style={styles.footageTitleRow}>
-                        <Ionicons name="videocam" size={15} color="rgba(255,255,255,0.8)" />
-                        <Text style={styles.footageTitle}>{i18n.t('footage') || 'Footage'}</Text>
-                        <View style={styles.footageCountBadge}>
-                          <Text style={styles.footageCountText}>{mediaPosts.length}</Text>
-                        </View>
-                      </View>
-                      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.footageScroll}>
-                        {mediaPosts.map((post: any) => (
-                          <TouchableOpacity
-                            key={`footage-${post.id}`}
-                            style={styles.footageThumb}
-                            onPress={() => setFullScreenMedia({ uri: post.mediaUrl, type: post.mediaType === 'video' ? 'video' : 'image' })}
-                            activeOpacity={0.85}
-                          >
-                            {post.mediaType === 'video' ? (
-                              <View style={styles.footageVideoPlaceholder}>
-                                <Ionicons name="play-circle" size={38} color="rgba(255,255,255,0.9)" />
-                                <View style={styles.footageVideoChip}>
-                                  <Ionicons name="videocam" size={10} color="#fff" />
-                                </View>
-                              </View>
-                            ) : (
-                              <Image source={{ uri: post.mediaUrl }} style={styles.footageImage} />
-                            )}
-                          </TouchableOpacity>
-                        ))}
-                      </ScrollView>
-                    </View>
-                  )}
-
-                  {/* Posts section label */}
-                  <View style={styles.sectionHeader}>
-                    <Ionicons name="newspaper-outline" size={14} color="rgba(255,255,255,0.5)" />
-                    <Text style={styles.sectionTitle}>{i18n.t('allPosts') || 'Posts'}</Text>
-                    {posts.length > 0 && (
-                      <View style={styles.footageCountBadge}>
-                        <Text style={styles.footageCountText}>{posts.length}</Text>
-                      </View>
-                    )}
-                  </View>
-                </>
-              }
-              renderItem={({ item }: any) => {
-                const timestamp = item.timestamp?.seconds
-                  ? new Date(item.timestamp.seconds * 1000)
-                  : item.createdAt?.seconds
-                    ? new Date(item.createdAt.seconds * 1000)
-                    : null;
-
-                return (
-                  <View style={styles.feedCard}>
-                    {/* Date + actions row */}
-                    <View style={styles.feedTopRow}>
-                      {timestamp && (
-                        <>
-                          <Ionicons name="time-outline" size={12} color="#bbb" />
-                          <Text style={styles.feedDate}>{timestamp.toLocaleDateString()}</Text>
-                        </>
-                      )}
-                      <View style={{ flex: 1 }} />
-                      <PostActionsMenu
-                        postId={item.id}
-                        postOwnerId={item.ownerId}
-                        postOwnerRole={item.ownerRole}
-                        mediaUrl={item.mediaUrl}
-                        mediaType={item.mediaType}
-                        contentText={item.content}
-                        postTimestamp={item.timestamp || item.createdAt}
-                      />
-                    </View>
-
-                    {/* Media */}
-                    {item.mediaUrl && (
-                      <View style={styles.mediaContainer}>
-                        {item.mediaType === 'video' ? (
-                          <Video
-                            source={{ uri: item.mediaUrl }}
-                            style={styles.mediaVideo}
-                            useNativeControls
-                            resizeMode={ResizeMode.CONTAIN}
-                            isLooping={false}
-                          />
-                        ) : (
-                          <Image
-                            source={{ uri: item.mediaUrl }}
-                            style={styles.mediaImage}
-                            resizeMode="cover"
-                          />
-                        )}
-                        <TouchableOpacity
-                          style={styles.fullScreenButton}
-                          onPress={() => setFullScreenMedia({ uri: item.mediaUrl, type: item.mediaType === 'video' ? 'video' : 'image' })}
-                          activeOpacity={0.7}
-                        >
-                          <Ionicons name="expand" size={20} color="#fff" />
-                        </TouchableOpacity>
-                      </View>
-                    )}
-
-                    {!!item.content && (
-                      <Text style={styles.feedContent}>{item.content}</Text>
-                    )}
-                  </View>
-                );
-              }}
-              ListEmptyComponent={
-                <View style={styles.emptyState}>
-                  <Ionicons name={errorMessage ? 'alert-circle-outline' : 'newspaper-outline'} size={64} color="#666" />
-                  <Text style={styles.emptyText}>{errorMessage || (i18n.t('noPosts') || 'No posts yet')}</Text>
-                  <Text style={styles.emptySubtext}>{errorMessage ? (i18n.t('tapToRetry') || 'Tap retry to try again.') : (i18n.t('userHasNoPosts') || 'This user has not posted anything yet')}</Text>
-                  {!!errorMessage && (
-                    <TouchableOpacity style={styles.retryButton} onPress={handleRetry}>
-                      <Text style={styles.retryButtonText}>{i18n.t('retry') || 'Retry'}</Text>
-                    </TouchableOpacity>
-                  )}
+    <View style={styles.container}>
+      <LinearGradient colors={['#05090c', '#071014', '#05090c']} style={styles.gradient}>
+        <Animated.View style={{ flex: 1, opacity: fadeAnim }} {...profileSwipeResponder.panHandlers}>
+          <FlatList
+            data={visiblePosts}
+            renderItem={renderPostTile}
+            keyExtractor={(item) => item.id}
+            numColumns={3}
+            columnWrapperStyle={styles.gridRow}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.listContent}
+            ListHeaderComponent={
+              <View style={styles.profileWrap}>
+                <View style={styles.topBar}>
+                  <TouchableOpacity style={styles.iconButton} onPress={() => router.back()}>
+                    <Ionicons name="chevron-back" size={32} color="#fff" />
+                  </TouchableOpacity>
+                  <Text style={styles.topHandle} numberOfLines={1}>{handle}</Text>
+                  <TouchableOpacity style={styles.iconButton} onPress={showMoreMenu}>
+                    <Ionicons name="ellipsis-horizontal" size={25} color="#fff" />
+                  </TouchableOpacity>
                 </View>
-              }
-            />
-          )}
+      {/* Android custom menu modal */}
+      {Platform.OS !== 'ios' && menuVisible && (
+        <Modal
+          visible={menuVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setMenuVisible(false)}
+        >
+          <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' }}>
+            <View style={{ backgroundColor: '#222', borderTopLeftRadius: 18, borderTopRightRadius: 18, padding: 18 }}>
+              <TouchableOpacity onPress={handleReportUser} style={{ paddingVertical: 16 }}>
+                <Text style={{ color: '#ff5252', fontSize: 18, fontWeight: '700', textAlign: 'center' }}>{i18n.t('reportUser') || 'Report User'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setMenuVisible(false)} style={{ paddingVertical: 16 }}>
+                <Text style={{ color: '#fff', fontSize: 18, textAlign: 'center' }}>{i18n.t('cancel') || 'Cancel'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+      )}
+
+
+                {/* Modern, centered, animated profile header */}
+                <View style={styles.profileHeaderModern}>
+                  <Animated.View style={[styles.avatarRingWrap, { opacity: fadeAnim, transform: [{ scale: fadeAnim }] }]}>  
+                    <LinearGradient
+                      colors={["#38bdf8", "#6366f1", "#a21caf"]}
+                      style={styles.avatarRingModern}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 1 }}
+                    >
+                      {photo ? (
+                        <Image source={{ uri: photo }} style={styles.avatarModern} />
+                      ) : (
+                        <View style={styles.avatarFallbackModern}>
+                          <Ionicons name="person" size={48} color="#d1d5db" />
+                        </View>
+                      )}
+                    </LinearGradient>
+                  </Animated.View>
+                  <Text style={styles.displayNameModern}>{displayName}</Text>
+                  {profileSuspended && <SuspendedBadge />}
+                  {!!city && <Text style={styles.cityTextModern}>{city}</Text>}
+                  {(!!playerPosition || playerAge !== null) && (
+                    <Text style={styles.playerMetaTextModern}>
+                      {[playerPosition, playerAge !== null ? `${i18n.t('age') || 'Age'} ${playerAge}` : ''].filter(Boolean).join(' · ')}
+                    </Text>
+                  )}
+                  <View style={styles.statsRowModern}>
+                    <View style={styles.statBlockModern}>
+                      <Text style={styles.statValueModern}>{formatCount(posts.length)}</Text>
+                      <Text style={styles.statLabelModern}>{i18n.t('post') || 'Posts'}</Text>
+                    </View>
+                    <View style={styles.statBlockModern}>
+                      <Text style={styles.statValueModern}>{formatCount(followersCount)}</Text>
+                      <Text style={styles.statLabelModern}>{i18n.t('followers') || 'Followers'}</Text>
+                    </View>
+                    <View style={styles.statBlockModern}>
+                      <Text style={styles.statValueModern}>{formatCount(followingCount)}</Text>
+                      <Text style={styles.statLabelModern}>{i18n.t('following') || 'Following'}</Text>
+                    </View>
+                  </View>
+                </View>
+
+                {!!bio && <Text style={styles.bioText}>{bio}</Text>}
+                {!!city && (
+                  <View style={styles.linkRow}>
+                    <Ionicons name="location-outline" size={18} color="#fff" />
+                    <Text style={styles.linkText}>{city}</Text>
+                  </View>
+                )}
+                {(!!playerPosition || playerAge !== null) && (
+                  <View style={styles.linkRow}>
+                    <Ionicons name="shield-outline" size={18} color="#fff" />
+                    <Text style={styles.linkText}>
+                      {[playerPosition, playerAge !== null ? `${i18n.t('age') || 'Age'} ${playerAge}` : ''].filter(Boolean).join(' · ')}
+                    </Text>
+                  </View>
+                )}
+
+                {ownerId !== auth.currentUser?.uid && (
+                  <View style={styles.actionRow}>
+                    <TouchableOpacity
+                      style={[styles.followButton, isFollowing && styles.followingButton]}
+                      onPress={handleToggleFollow}
+                      activeOpacity={0.88}
+                    >
+                      <Text style={[styles.followButtonText, isFollowing && styles.followingButtonText]}>
+                        {isFollowing ? (i18n.t('following') || 'Following') : (i18n.t('follow') || 'Follow')}
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.messageButton} onPress={handleMessage} activeOpacity={0.88}>
+                      <Text style={styles.messageButtonText}>{i18n.t('message') || 'Message'}</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+
+                <View style={styles.profileTabs}>
+                  <TouchableOpacity
+                    style={[styles.profileTab, activeTab === 'posts' && styles.profileTabActive]}
+                    onPress={() => setActiveTab('posts')}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons name="grid" size={28} color={activeTab === 'posts' ? '#fff' : '#8b949e'} />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.profileTab, activeTab === 'videos' && styles.profileTabActive]}
+                    onPress={() => setActiveTab('videos')}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons name="play-circle-outline" size={30} color={activeTab === 'videos' ? '#fff' : '#8b949e'} />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.profileTab, activeTab === 'reposts' && styles.profileTabActive]}
+                    onPress={() => setActiveTab('reposts')}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons name="repeat-outline" size={30} color={activeTab === 'reposts' ? '#fff' : '#8b949e'} />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            }
+            ListEmptyComponent={
+              <View style={styles.emptyState}>
+                <Ionicons
+                  name={activeTab === 'videos' ? 'play-circle-outline' : activeTab === 'reposts' ? 'repeat-outline' : 'images-outline'}
+                  size={48}
+                  color="#6b7280"
+                />
+                <Text style={styles.emptyText}>
+                  {activeTab === 'videos'
+                    ? (i18n.t('noVideosYet') || 'No videos yet.')
+                    : activeTab === 'reposts'
+                      ? (i18n.t('noRepostsYet') || 'No reposts yet.')
+                      : (i18n.t('noPosts') || 'No posts yet.')}
+                </Text>
+              </View>
+            }
+          />
         </Animated.View>
       </LinearGradient>
 
-      {/* Full Screen Media Viewer */}
-      <Modal
-        visible={!!fullScreenMedia}
-        transparent={false}
-        animationType="fade"
-        onRequestClose={() => setFullScreenMedia(null)}
-        statusBarTranslucent={true}
-      >
-        <TouchableOpacity
-          style={styles.fullScreenContainer}
-          activeOpacity={1}
-          onPress={() => setFullScreenMedia(null)}
-        >
-          <TouchableOpacity
-            style={styles.fullScreenCloseButton}
-            onPress={() => setFullScreenMedia(null)}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="close" size={32} color="#fff" />
-          </TouchableOpacity>
-          {fullScreenMedia && (
-            <View style={styles.fullScreenContent} pointerEvents="none">
-              {fullScreenMedia.type === 'video' ? (
-                <Video
-                  source={{ uri: fullScreenMedia.uri }}
-                  style={styles.fullScreenVideo}
-                  useNativeControls
-                  resizeMode={ResizeMode.CONTAIN}
-                  isLooping={false}
-                />
-              ) : (
-                <Image
-                  source={{ uri: fullScreenMedia.uri }}
-                  style={styles.fullScreenImage}
-                  resizeMode="contain"
-                />
-              )}
+      <Modal visible={!!selectedPost} transparent={false} animationType="slide" onRequestClose={() => setSelectedPostId(null)}>
+        <View style={styles.postViewerContainer}>
+          <View style={styles.postViewerHeader}>
+            <TouchableOpacity style={styles.postViewerBackButton} onPress={() => setSelectedPostId(null)}>
+              <Ionicons name="chevron-back" size={28} color="#fff" />
+            </TouchableOpacity>
+            <View style={styles.postViewerHeaderTextWrap}>
+              <Text style={styles.postViewerTitle}>{i18n.t('posts') || 'Posts'}</Text>
+              <Text style={styles.postViewerSubtitle} numberOfLines={1}>{handle}</Text>
             </View>
-          )}
-        </TouchableOpacity>
+            <View style={styles.postViewerHeaderSpacer} />
+          </View>
+
+          <FlatList
+            data={detailPosts}
+            renderItem={renderDetailPost}
+            keyExtractor={(item) => item.id}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.postViewerListContent}
+          />
+        </View>
       </Modal>
-    </KeyboardAvoidingView>
+
+      {commentsPostId && (
+        <CommentsSheet
+          postId={commentsPostId}
+          postOwnerId={selectedCommentsPost?.ownerId}
+          visible={!!commentsPostId}
+          onClose={() => setCommentsPostId(null)}
+          currentUserName={currentUserName}
+          currentUserPhoto={currentUserPhoto}
+        />
+      )}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
+  container: { flex: 1, backgroundColor: '#05090c' },
   gradient: { flex: 1 },
-
-  // Header
-  header: {
-    paddingTop: Platform.OS === 'ios' ? 60 : 40,
-    paddingHorizontal: 20,
-    paddingBottom: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-  },
-  backButton: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  headerTitle: {
-    flex: 1,
-    fontSize: 22,
-    fontWeight: '800',
-    color: '#fff',
-  },
-
-  // List
-  listContent: {
-    paddingHorizontal: 20,
-    paddingBottom: 50,
-  },
-
-  // Hero card
-  heroCard: {
-    backgroundColor: '#fff',
-    borderRadius: 24,
-    marginBottom: 16,
-    overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.14,
-    shadowRadius: 18,
-    elevation: 8,
-  },
-  heroStrip: {
-    backgroundColor: '#111',
-    alignItems: 'center',
-    paddingTop: 28,
-    paddingBottom: 36,
-  },
-  heroPhoto: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    borderWidth: 3,
-    borderColor: 'rgba(255,255,255,0.2)',
-    backgroundColor: '#333',
-  },
-  heroPhotoPlaceholder: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 3,
-    borderColor: 'rgba(255,255,255,0.12)',
-  },
-  heroBody: {
-    padding: 20,
-    marginTop: -20,
-    alignItems: 'center',
-  },
-  heroName: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: '#000',
-    marginBottom: 10,
-    textAlign: 'center',
-  },
-  heroBadgeRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 10,
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-  },
-  heroBadge: {
-    backgroundColor: '#000',
-    borderRadius: 20,
+  loaderWrap: { flex: 1, backgroundColor: '#05090c', justifyContent: 'center', alignItems: 'center' },
+  listContent: { paddingBottom: 28 },
+  profileWrap: { paddingTop: Platform.OS === 'ios' ? 54 : 28 },
+  topBar: {
+    height: 54,
     paddingHorizontal: 14,
-    paddingVertical: 5,
-  },
-  heroBadgeText: { fontSize: 13, color: '#fff', fontWeight: '700' },
-  heroBadgeAlt: { backgroundColor: '#f0f0f0' },
-  heroBadgeAltText: { color: '#333' },
-  heroLocationRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    marginBottom: 8,
+    justifyContent: 'space-between',
   },
-  heroCity: { fontSize: 14, color: '#888' },
-  heroBio: {
-    fontSize: 14,
-    color: '#555',
-    lineHeight: 21,
-    textAlign: 'center',
-    marginTop: 4,
-  },
-
-  // Footage filmstrip
-  footageSection: {
-    marginBottom: 16,
-  },
-  footageTitleRow: {
-    flexDirection: 'row',
+  iconButton: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center' },
+  topHandle: { flex: 1, color: '#fff', fontSize: 28, fontWeight: '900', marginHorizontal: 8 },
+  profileHeaderModern: {
     alignItems: 'center',
-    gap: 8,
-    marginBottom: 10,
-    paddingHorizontal: 4,
+    marginTop: 18,
+    marginBottom: 18,
+    paddingVertical: 18,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: 28,
+    marginHorizontal: 18,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    elevation: 6,
   },
-  footageTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: 'rgba(255,255,255,0.8)',
-    letterSpacing: 0.5,
-    textTransform: 'uppercase',
-  },
-  footageCountBadge: {
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    borderRadius: 10,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-  },
-  footageCountText: {
-    fontSize: 12,
-    color: '#fff',
-    fontWeight: '700',
-  },
-  footageScroll: {
-    paddingRight: 8,
-    gap: 10,
-  },
-  footageThumb: {
-    width: 130,
-    height: 130,
-    borderRadius: 16,
-    overflow: 'hidden',
-    backgroundColor: '#1a1a1a',
-  },
-  footageImage: {
-    width: '100%',
-    height: '100%',
-  },
-  footageVideoPlaceholder: {
-    flex: 1,
-    backgroundColor: '#222',
+  avatarRingWrap: {
+    alignItems: 'center',
     justifyContent: 'center',
-    alignItems: 'center',
+    marginBottom: 10,
   },
-  footageVideoChip: {
+  avatarRingModern: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    borderWidth: 3,
+    borderColor: '#fff',
+    overflow: 'hidden',
+  },
+  avatarModern: {
+    width: 104,
+    height: 104,
+    borderRadius: 52,
+    borderWidth: 2,
+    borderColor: '#fff',
+    backgroundColor: '#222',
+  },
+  avatarFallbackModern: {
+    width: 104,
+    height: 104,
+    borderRadius: 52,
+    backgroundColor: '#222',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
+  displayNameModern: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#fff',
+    marginTop: 6,
+    textAlign: 'center',
+    letterSpacing: 0.2,
+  },
+  cityTextModern: {
+    fontSize: 15,
+    color: '#a5b4fc',
+    marginTop: 2,
+    marginBottom: 4,
+    textAlign: 'center',
+  },
+  playerMetaTextModern: {
+    fontSize: 13,
+    color: '#d1d5db',
+    marginBottom: 8,
+    textAlign: 'center',
+    fontWeight: '700',
+  },
+  statsRowModern: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 10,
+    marginBottom: 2,
+    gap: 18,
+  },
+  statBlockModern: {
+    alignItems: 'center',
+    marginHorizontal: 10,
+    paddingHorizontal: 8,
+  },
+  statValueModern: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#fff',
+    marginBottom: 2,
+  },
+  statLabelModern: {
+    fontSize: 13,
+    color: '#a5b4fc',
+    fontWeight: '500',
+    letterSpacing: 0.1,
+  },
+  bioText: { color: '#fff', fontSize: 18, fontWeight: '700', lineHeight: 23, paddingHorizontal: 18, marginTop: 16 },
+  linkRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 18, marginTop: 8 },
+  linkText: { color: '#fff', fontSize: 16, fontWeight: '900' },
+  actionRow: { flexDirection: 'row', gap: 8, paddingHorizontal: 18, marginTop: 18 },
+  followButton: {
+    flex: 1,
+    height: 44,
+    borderRadius: 9,
+    backgroundColor: '#405cff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  followingButton: { backgroundColor: '#26303a', borderWidth: 1, borderColor: '#374151' },
+  followButtonText: { color: '#fff', fontSize: 18, fontWeight: '900' },
+  followingButtonText: { color: '#fff' },
+  messageButton: {
+    flex: 1,
+    height: 44,
+    borderRadius: 9,
+    backgroundColor: '#26303a',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  messageButtonText: { color: '#fff', fontSize: 18, fontWeight: '900' },
+  profileTabs: {
+    height: 62,
+    marginTop: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+    borderBottomWidth: 1,
+    borderBottomColor: '#1f2937',
+  },
+  profileTab: { flex: 1, height: '100%', alignItems: 'center', justifyContent: 'center' },
+  profileTabActive: {
+    flex: 1,
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderBottomWidth: 2,
+    borderBottomColor: '#fff',
+  },
+  gridRow: { gap: GRID_GAP },
+  gridItem: {
+    width: GRID_ITEM_SIZE,
+    height: GRID_ITEM_SIZE,
+    marginBottom: GRID_GAP,
+    backgroundColor: '#111827',
+  },
+  gridMedia: { width: '100%', height: '100%' },
+  videoGridTile: {
+    flex: 1,
+    backgroundColor: '#111827',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  gridTextFallback: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 8, backgroundColor: '#17202b' },
+  gridTextFallbackText: { color: '#fff', fontSize: 13, fontWeight: '700', textAlign: 'center' },
+  pinBadge: { position: 'absolute', top: 8, right: 8, transform: [{ rotate: '35deg' }] },
+  videoBadge: {
     position: 'absolute',
     bottom: 8,
     right: 8,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
     backgroundColor: 'rgba(0,0,0,0.55)',
-    borderRadius: 8,
-    padding: 4,
-  },
-
-  // Section header
-  sectionHeader: {
-    flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    marginBottom: 12,
-    paddingHorizontal: 4,
-  },
-  sectionTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: 'rgba(255,255,255,0.6)',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-
-  // Feed cards
-  feedCard: {
-    backgroundColor: '#fff',
-    borderRadius: 20,
-    marginBottom: 14,
-    overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-    elevation: 4,
-  },
-  feedTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 8,
-  },
-  feedDate: {
-    fontSize: 12,
-    color: '#bbb',
-  },
-  feedContent: {
-    fontSize: 14,
-    color: '#333',
-    lineHeight: 21,
-    paddingHorizontal: 16,
-    paddingBottom: 14,
-    paddingTop: 6,
-  },
-  mediaContainer: {
-    width: '100%',
-    backgroundColor: '#000',
-  },
-  mediaImage: {
-    width: '100%',
-    height: 280,
-    backgroundColor: '#000',
-  },
-  mediaVideo: {
-    width: '100%',
-    height: 280,
-    backgroundColor: '#000',
-  },
-  fullScreenButton: {
-    position: 'absolute',
-    bottom: 10,
-    right: 10,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    borderRadius: 18,
-    width: 36,
-    height: 36,
     justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 10,
   },
-
-  // Loading / empty
-  loadingState: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  loadingText: { color: '#fff', fontSize: 16, marginTop: 12 },
-  emptyState: { alignItems: 'center', justifyContent: 'center', paddingVertical: 60 },
-  emptyText: { fontSize: 18, fontWeight: '600', color: '#fff', marginTop: 16 },
-  emptySubtext: { fontSize: 14, color: 'rgba(255,255,255,0.6)', marginTop: 8 },
-  retryButton: { marginTop: 14, backgroundColor: '#fff', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10 },
-  retryButtonText: { color: '#000', fontWeight: '700', fontSize: 14 },
-
-  // Fullscreen viewer
-  fullScreenContainer: {
+  emptyState: { alignItems: 'center', justifyContent: 'center', paddingVertical: 70 },
+  emptyText: { color: '#d1d5db', fontSize: 16, fontWeight: '800', marginTop: 12 },
+  postViewerContainer: {
     flex: 1,
-    backgroundColor: '#000',
-    justifyContent: 'center',
+    backgroundColor: '#05090c',
+  },
+  postViewerHeader: {
+    paddingTop: Platform.OS === 'ios' ? 54 : 24,
+    paddingHorizontal: 12,
+    paddingBottom: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#17212b',
+    flexDirection: 'row',
     alignItems: 'center',
   },
-  fullScreenCloseButton: {
-    position: 'absolute',
-    top: Platform.OS === 'ios' ? 50 : 40,
-    right: 20,
-    zIndex: 10,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+  postViewerBackButton: {
+    width: 42,
+    height: 42,
+    alignItems: 'center',
     justifyContent: 'center',
+  },
+  postViewerHeaderTextWrap: {
+    flex: 1,
     alignItems: 'center',
   },
-  fullScreenContent: {
-    width: '100%',
-    height: '100%',
-    justifyContent: 'center',
-    alignItems: 'center',
+  postViewerHeaderSpacer: {
+    width: 42,
   },
-  fullScreenImage: { width: '100%', height: '100%' },
-  fullScreenVideo: { width: '100%', height: '100%' },
+  postViewerTitle: {
+    color: '#fff',
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  postViewerSubtitle: {
+    color: '#e5e7eb',
+    fontSize: 14,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  postViewerListContent: {
+    paddingBottom: 30,
+  },
+  detailPostCard: {
+    borderBottomWidth: 1,
+    borderBottomColor: '#17212b',
+    paddingBottom: 10,
+    marginBottom: 6,
+  },
+  detailPostHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingTop: 12,
+  },
+  detailAuthorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    minWidth: 0,
+  },
+  detailAvatar: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    marginRight: 10,
+  },
+  detailAvatarFallback: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    marginRight: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#1f2937',
+  },
+  detailAvatarInitials: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 13,
+  },
+  detailAuthorText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  detailAuthorName: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  detailPostDate: {
+    color: '#d1d5db',
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  detailCaptionWrap: {
+    paddingHorizontal: 14,
+    paddingTop: 4,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  detailCaptionName: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  detailCaptionText: {
+    color: '#fff',
+    fontSize: 15,
+    lineHeight: 22,
+    flexShrink: 1,
+  },
+  detailRepostBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginHorizontal: 14,
+    marginTop: 8,
+  },
+  detailRepostText: {
+    color: '#a7f3d0',
+    fontSize: 12,
+    fontWeight: '700',
+  },
 });
-

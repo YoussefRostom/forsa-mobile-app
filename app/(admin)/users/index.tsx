@@ -2,9 +2,10 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, FlatList, StyleSheet, TouchableOpacity, Alert, TextInput } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { collection, getDocs, deleteDoc, doc } from 'firebase/firestore';
+import { collection, getDocs } from 'firebase/firestore';
 import { db } from '../../../lib/firebase';
 import FootballLoader from '../../../components/FootballLoader';
+import { deleteUserPermanentlyAsAdmin } from '../../../services/AdminUserDeletionService';
 
 const C = {
     bg: '#f0f4f8', card: '#ffffff', border: '#e2e8f0',
@@ -57,6 +58,7 @@ export default function UsersList() {
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState('');
     const [roleFilter, setRoleFilter] = useState<'all' | 'player' | 'parent' | 'academy' | 'clinic' | 'agent'>('all');
+    const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
     const router = useRouter();
 
     useEffect(() => {
@@ -87,12 +89,15 @@ export default function UsersList() {
                 { text: "Cancel", style: "cancel" },
                 {
                     text: "Delete", style: "destructive", onPress: async () => {
+                        setDeletingUserId(id);
                         try {
-                            await deleteDoc(doc(db, 'users', id));
-                            setUsers(users.filter(u => u.id !== id));
+                            await deleteUserPermanentlyAsAdmin(id);
+                            setUsers((prev) => prev.filter(u => u.id !== id));
                         } catch (error) {
                             console.error("Error deleting user:", error);
-                            Alert.alert("Error", "Failed to delete user");
+                            Alert.alert("Error", error instanceof Error ? error.message : "Failed to delete user");
+                        } finally {
+                            setDeletingUserId((current) => current === id ? null : current);
                         }
                     }
                 }
@@ -119,11 +124,12 @@ export default function UsersList() {
         const roleMeta = ROLE_META[role] || { color: C.muted, bg: '#f1f5f9', icon: 'person' };
         const statusMeta = STATUS_META[status] || STATUS_META['active'];
         const initials = displayName.split(' ').slice(0, 2).map((w: string) => w[0]).join('').toUpperCase() || '?';
+        const isDeleting = deletingUserId === item.id;
 
         return (
             <TouchableOpacity
-                style={S.userCard}
-                onPress={() => router.push(`/(admin)/users/${item.id}`)}
+                style={[S.userCard, isDeleting && S.userCardDeleting]}
+                onPress={() => !isDeleting && router.push(`/(admin)/users/${item.id}`)}
                 activeOpacity={0.75}
             >
                 {/* Avatar */}
@@ -153,16 +159,22 @@ export default function UsersList() {
                 {/* Actions */}
                 <View style={S.actions}>
                     <TouchableOpacity
-                        style={[S.actionBtn, { backgroundColor: C.blueLight }]}
-                        onPress={() => router.push(`/(admin)/users/${item.id}`)}
+                        style={[S.actionBtn, { backgroundColor: C.blueLight }, isDeleting && S.actionBtnDisabled]}
+                        onPress={() => !isDeleting && router.push(`/(admin)/users/${item.id}`)}
+                        disabled={isDeleting}
                     >
                         <Ionicons name="eye" size={16} color={C.blue} />
                     </TouchableOpacity>
                     <TouchableOpacity
-                        style={[S.actionBtn, { backgroundColor: C.redLight }]}
-                        onPress={() => handleDelete(item.id, displayName)}
+                        style={[S.actionBtn, isDeleting ? S.actionBtnDeleting : { backgroundColor: C.redLight }]}
+                        onPress={() => !isDeleting && handleDelete(item.id, displayName)}
+                        disabled={isDeleting}
                     >
-                        <Ionicons name="trash" size={16} color={C.red} />
+                        {isDeleting ? (
+                            <FootballLoader size="small" color={C.red} />
+                        ) : (
+                            <Ionicons name="trash" size={16} color={C.red} />
+                        )}
                     </TouchableOpacity>
                 </View>
             </TouchableOpacity>
@@ -259,6 +271,7 @@ const S = StyleSheet.create({
 
     // User card
     userCard:     { flexDirection: 'row', alignItems: 'center', backgroundColor: C.card, borderRadius: 14, padding: 14, marginBottom: 10, gap: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 4, elevation: 2 },
+    userCardDeleting: { opacity: 0.8 },
     avatar:       { width: 48, height: 48, borderRadius: 24, justifyContent: 'center', alignItems: 'center' },
     avatarText:   { fontSize: 16, fontWeight: '900' },
     userInfo:     { flex: 1, minWidth: 0 },
@@ -272,6 +285,8 @@ const S = StyleSheet.create({
     roleText:     { fontSize: 12, fontWeight: '700', textTransform: 'capitalize' },
     actions:      { flexDirection: 'column', gap: 6 },
     actionBtn:    { width: 34, height: 34, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
+    actionBtnDisabled: { opacity: 0.55 },
+    actionBtnDeleting: { width: 34, height: 34, borderRadius: 10, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fee2e2' },
 
     // Empty state
     emptyState:   { alignItems: 'center', paddingVertical: 48, gap: 8 },

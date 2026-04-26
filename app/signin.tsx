@@ -21,6 +21,7 @@ import { auth, db } from "../lib/firebase";
 import { getPhoneIdentityCandidates, normalizePhoneForAuth, normalizePhoneForTwilio } from "../lib/validations";
 import { lookupEmailIndex } from "../lib/emailIndex";
 import { lookupPhoneIndex } from "../lib/phoneIndex";
+import { lookupPhoneLoginBlock } from "../lib/phoneLoginBlocks";
 import { isExpectedNetworkError } from "../lib/networkErrors";
 import i18n from "../locales/i18n";
 import { useAuth } from "../context/AuthContext";
@@ -97,6 +98,17 @@ const SignInScreen = () => {
       let userCredential: any;
       const digits = emailOrPhone.replace(/\D/g, "");
       const phoneCandidates = !isEmail ? getPhoneIdentityCandidates(emailOrPhone) : [];
+
+      if (!isEmail) {
+        for (const candidate of phoneCandidates) {
+          const blockedAuthEmail = await lookupPhoneLoginBlock(candidate);
+          if (blockedAuthEmail) {
+            const e = new Error(`No account linked to "${emailOrPhone}". Please use your updated phone number or email.`) as any;
+            e.code = "auth/user-not-found";
+            throw e;
+          }
+        }
+      }
 
       // We try multiple identifier formats to ensure legacy profiles still work
       const possibleAuthEmails = isEmail

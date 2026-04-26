@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useState, useEffect, useRef } from 'react';
-import { FlatList, Image, Keyboard, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { FlatList, Image, Keyboard, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View, Alert } from 'react-native';
 import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import i18n from '../locales/i18n';
@@ -10,6 +10,8 @@ import {
   sendMessage, 
   subscribeToMessages, 
   markMessagesAsRead,
+  clearConversationUnreadCache,
+  deleteMessage,
   Message 
 } from '../services/MessagingService';
 import { auth } from '../lib/firebase';
@@ -57,6 +59,7 @@ export default function ClinicChatScreen() {
 
         // Subscribe to real-time messages
         if (convId) {
+          clearConversationUnreadCache(convId);
           unsubscribe = subscribeToMessages(convId, (msgs) => {
             setMessages(msgs);
             setLoading(false);
@@ -90,30 +93,56 @@ export default function ClinicChatScreen() {
     }
   }, [messages]);
 
+  const handleDeleteMessage = (message: Message) => {
+    if (!conversationIdState) return;
+
+    const createdAtMs = message.createdAt?.toDate ? message.createdAt.toDate().getTime() : 0;
+    if (!createdAtMs || Date.now() - createdAtMs > 10 * 60 * 1000) {
+      Alert.alert(
+        i18n.t('deleteMessage') || 'Delete message',
+        i18n.t('deleteTimeLimitReached') || 'You can delete messages only within 10 minutes.'
+      );
+      return;
+    }
+
+    Alert.alert(
+      i18n.t('deleteMessage') || 'Delete message',
+      i18n.t('deleteMessageConfirm') || 'Delete this message for everyone?',
+      [
+        { text: i18n.t('cancel') || 'Cancel', style: 'cancel' },
+        {
+          text: i18n.t('delete') || 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            deleteMessage(conversationIdState, message.id).catch((err: any) => {
+              if (err?.message === 'DELETE_WINDOW_EXPIRED') {
+                Alert.alert(
+                  i18n.t('deleteMessage') || 'Delete message',
+                  i18n.t('deleteTimeLimitReached') || 'You can delete messages only within 10 minutes.'
+                );
+                return;
+              }
+              console.warn('Delete message failed:', err);
+            });
+          },
+        },
+      ]
+    );
+  };
+
   const handleSendMessage = async () => {
     if (sending || !input.trim() || !conversationIdState) return;
     const message = input.trim();
-    const optimisticMessage: Message = {
-      id: `local-${Date.now()}`,
-      conversationId: conversationIdState,
-      senderId: auth.currentUser?.uid || '',
-      content: message,
-      senderName: auth.currentUser?.displayName || auth.currentUser?.email || 'You',
-      senderPhoto: auth.currentUser?.photoURL || undefined,
-      isRead: false,
-      createdAt: { toDate: () => new Date() },
-    };
 
     setSending(true);
     setInput('');
-    setMessages((prev) => [...prev, optimisticMessage]);
     scrollToConversationEnd();
     Keyboard.dismiss();
 
     try {
       await sendMessage(conversationIdState, message);
     } catch (error: any) {
-      setMessages((prev) => prev.filter((item) => item.id !== optimisticMessage.id));
+      setInput(message);
       console.error('Error sending message:', error);
     } finally {
       setSending(false);
@@ -176,16 +205,23 @@ export default function ClinicChatScreen() {
                     </View>
                   )
                 )}
+                <TouchableOpacity
+                  activeOpacity={isSent ? 0.7 : 1}
+                  onLongPress={isSent ? () => handleDeleteMessage(item) : undefined}
+                  delayLongPress={400}
+                  style={{ maxWidth: '78%' }}
+                >
                 <View style={[styles.messageBubble, isSent ? styles.myMessage : styles.systemMessage]}>
                   <Text style={isSent ? styles.myMessageText : styles.systemMessageText}>
                     {item.content || (item.mediaUrl ? 'Media' : '')}
                   </Text>
                   {!!timeLabel && (
                     <Text style={isSent ? styles.messageMetaSent : styles.messageMetaReceived}>
-                      {timeLabel}{isSent ? ` • ${item.isRead ? (i18n.t('messageSeen') || 'Seen') : (i18n.t('messageSent') || 'Sent')}` : ''}
+                      {timeLabel}{isSent ? ` - ${item.isRead ? (i18n.t('messageSeen') || 'Seen') : (i18n.t('messageSent') || 'Sent')}` : ''}
                     </Text>
                   )}
                 </View>
+                </TouchableOpacity>
               </View>
             );
           }}

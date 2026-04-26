@@ -9,6 +9,12 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    // --- Blocked users subcollection ---
+    match /users/{uid}/blocked/{blockedUid} {
+      allow get, list: if isAuthed() && request.auth.uid == uid;
+      allow create, update, delete: if isAuthed() && request.auth.uid == uid;
+    }
+
     // Admin access: support both the legacy `/admins/{uid}` allowlist and the live `users/{uid}.role == 'admin'` model.
     function isAdmin() {
       return isAuthed() && (
@@ -112,6 +118,17 @@ service cloud.firestore {
         data.academyId == request.auth.uid
       );
     }
+    // =========================
+// Follows collection - follow/unfollow logic
+// =========================
+match /follows/{followId} {
+  allow create: if isAuthed() && request.resource.data.follower == request.auth.uid;
+  allow delete: if isAuthed() && resource.data.follower == request.auth.uid;
+  allow read: if isAuthed() && (
+    resource.data.follower == request.auth.uid ||
+    resource.data.following == request.auth.uid
+  );
+}     
 
     function isBookingProvider(data) {
       return isAuthed() && data.providerId == request.auth.uid;
@@ -231,6 +248,27 @@ service cloud.firestore {
         );
     }
 
+    function notificationPostRecipientAllowed() {
+      return notificationDataField('postId')
+        && request.resource.data.data.postId is string
+        && exists(/databases/$(database)/documents/posts/$(request.resource.data.data.postId))
+        && get(/databases/$(database)/documents/posts/$(request.resource.data.data.postId)).data.ownerId == request.resource.data.userId;
+    }
+
+    function notificationFollowRecipientAllowed() {
+      return notificationDataField('notificationKind')
+        && request.resource.data.data.notificationKind == 'follow'
+        && notificationDataField('actorId')
+        && request.resource.data.data.actorId == request.auth.uid
+        && request.resource.data.data.userId == request.resource.data.userId
+        && request.resource.data.userId is string
+        && request.resource.data.userId != request.auth.uid
+        && (
+          exists(/databases/$(database)/documents/users/$(request.resource.data.userId)/followers/$(request.auth.uid)) ||
+          exists(/databases/$(database)/documents/users/$(request.auth.uid)/following/$(request.resource.data.userId))
+        );
+    }
+
     function canCreateNotification() {
       return isAdmin() || (
         isAuthed()
@@ -244,7 +282,9 @@ service cloud.firestore {
           notificationBookingRecipientAllowed() ||
           notificationCheckInRecipientAllowed() ||
           notificationReportRecipientAllowed() ||
-          notificationConversationRecipientAllowed()
+          notificationConversationRecipientAllowed() ||
+          notificationPostRecipientAllowed() ||
+          notificationFollowRecipientAllowed()
         )
       );
     }
@@ -305,6 +345,13 @@ service cloud.firestore {
         && request.auth.token.email != null
         && request.resource.data.keys().hasOnly(['authEmail'])
         && request.resource.data.authEmail == request.auth.token.email;
+    }
+
+    function canDeleteOwnIndexDoc() {
+      return isAuthed()
+        && request.auth.token.email != null
+        && resource.data.keys().hasOnly(['authEmail'])
+        && resource.data.authEmail == request.auth.token.email;
     }
 
     function customerCanUpdateBooking() {
@@ -370,6 +417,18 @@ service cloud.firestore {
         && request.resource.data.uid == resource.data.uid
       ); // Role + uid immutable for non-admins
       allow delete: if isAdmin();
+
+      // --- Follow subcollections ---
+      match /following/{targetUid} {
+        allow get, list: if isAuthed();
+        // Allow the follower to write their own following
+        allow create, update, delete: if isAuthed() && request.auth.uid == uid;
+      }
+      match /followers/{sourceUid} {
+        allow get, list: if isAuthed();
+        // Allow the follower to write their own entry in the target's followers
+        allow create, update, delete: if isAuthed() && request.auth.uid == sourceUid;
+      }
     }
 
     // =========================
@@ -454,13 +513,47 @@ service cloud.firestore {
       allow create: if isAuthed()
         && request.resource.data.ownerId == request.auth.uid;
 
-      allow update: if isAuthed()
-        && resource.data.ownerId == request.auth.uid
-        && request.resource.data.ownerId == resource.data.ownerId;
+      allow update: if isAuthed() && (
+        // Owner can update their own post
+        (resource.data.ownerId == request.auth.uid
+          && request.resource.data.ownerId == resource.data.ownerId) ||
+        // Any authenticated user can update only counter fields (likes, comments, reposts)
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['likesCount', 'commentsCount', 'repostsCount'])
+      );
+
+        // Note: diff() with FieldValue.increment is handled server-side;
+        // the fallback allows any authed user to touch counter fields only.
 
       allow delete: if isAuthed() && resource.data.ownerId == request.auth.uid;
 
       allow read, write, list: if isAdmin();
+
+      // Likes subcollection: each user manages only their own like document
+      match /likes/{userId} {
+        allow read: if isAuthed();
+        allow write: if isAuthed() && request.auth.uid == userId;
+      }
+
+      // Comments subcollection: any authed user can read; only author can create/delete own
+      match /comments/{commentId} {
+        allow read: if isAuthed();
+        allow create: if isAuthed()
+          && request.resource.data.authorId == request.auth.uid
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 500;
+        allow delete: if isAuthed() && (
+          resource.data.authorId == request.auth.uid ||
+          get(/databases/$(database)/documents/posts/$(postId)).data.ownerId == request.auth.uid
+        );
+      }
+
+      // Reposts subcollection: each user manages only their own repost document
+      match /reposts/{userId} {
+        allow read: if isAuthed();
+        allow write: if isAuthed() && request.auth.uid == userId;
+      }
     }
 
     match /media/{mediaId} {
@@ -531,9 +624,7 @@ service cloud.firestore {
 
       // No blanket list access; queries must resolve only to conversations the caller participates in.
 
-      // New conversations are restricted to admin-involved threads:
-      // - any user can create a conversation with admin
-      // - admin can create conversations with anyone
+      // New conversations can be created by either participant.
       allow create: if isAuthed()
         && request.resource.data.participant1Id is string
         && request.resource.data.participant2Id is string
@@ -541,12 +632,17 @@ service cloud.firestore {
         && (
           request.resource.data.participant1Id == request.auth.uid ||
           request.resource.data.participant2Id == request.auth.uid ||
+          (
+            request.resource.data.keys().hasAny(['participantIds']) &&
+            request.resource.data.participantIds is list &&
+            request.resource.data.participantIds.hasAny([request.auth.uid])
+          ) ||
+          (
+            request.resource.data.keys().hasAny(['participants']) &&
+            request.resource.data.participants is list &&
+            request.resource.data.participants.hasAny([request.auth.uid])
+          ) ||
           isAdmin()
-        )
-        && (
-          isAdmin() ||
-          isUserAdminByUid(request.resource.data.participant1Id) ||
-          isUserAdminByUid(request.resource.data.participant2Id)
         );
 
       allow update, delete: if isAuthed() && (
@@ -639,22 +735,18 @@ service cloud.firestore {
     }
 
     match /notifications/{notificationId} {
-      allow get, read: if isAuthed() && (
-        resource.data.userId == request.auth.uid ||
-        isAdmin()
+      allow get, read: if isAuthed() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow list: if isAuthed();
+      allow create: if canCreateNotification() || (
+        isAuthed() && (
+          (
+            (request.resource.data.type == 'follow' || request.resource.data.type == 'info') &&
+            request.resource.data.userId == request.auth.uid &&
+            request.resource.data.createdBy == request.auth.uid
+          )
+        )
       );
-
-      allow create: if canCreateNotification();
-
-      // Recipient can mark as read; admin can do anything.
-      allow update: if isAdmin() || (
-        isAuthed()
-        && resource.data.userId == request.auth.uid
-        && request.resource.data.userId == resource.data.userId
-        && request.resource.data.createdBy == resource.data.createdBy
-        && request.resource.data.read == true
-      );
-
+      allow update: if isAdmin() || (isAuthed() && resource.data.userId == request.auth.uid && request.resource.data.read == true && request.resource.data.diff(resource.data).changedKeys().hasOnly(['read']));
       allow delete: if isAdmin();
     }
 
@@ -766,7 +858,7 @@ service cloud.firestore {
       allow update: if isAdmin() || (
         canWriteOwnIndexDoc() && resource.data.authEmail == request.auth.token.email
       );
-      allow delete: if isAdmin();
+      allow delete: if isAdmin() || canDeleteOwnIndexDoc();
     }
     match /phoneIndex/{docId} {
       allow get, read: if true;
@@ -775,7 +867,15 @@ service cloud.firestore {
       allow update: if isAdmin() || (
         canWriteOwnIndexDoc() && resource.data.authEmail == request.auth.token.email
       );
-      allow delete: if isAdmin();
+      allow delete: if isAdmin() || canDeleteOwnIndexDoc();
+    }
+
+    match /phoneLoginBlocks/{docId} {
+      allow get, read: if true;
+      allow list: if false;
+      allow create: if canWriteOwnIndexDoc();
+      allow update: if false;
+      allow delete: if isAdmin() || canDeleteOwnIndexDoc();
     }
 
     // =========================

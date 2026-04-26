@@ -4,6 +4,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
+import { useOnboarding } from '../context/OnboardingContext';
 import { doc, setDoc } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import { resolveUserDisplayName } from '../lib/userDisplayName';
@@ -42,6 +43,7 @@ import {
 import { uploadMedia } from '../services/MediaService';
 import i18n from '../locales/i18n';
 import FootballLoader from '../components/FootballLoader';
+import SignupStepBar from '../components/SignupStepBar';
 import { notifyAdminsOfNewSignup } from '../services/SignupNotificationService';
 // import OtpModal from '../components/OtpModal'; // Removed
 
@@ -113,6 +115,7 @@ const districtsByCity: Record<string, { key: string; label: string }[]> = {
 
 const SignupClinic = () => {
   const router = useRouter();
+  const { startOnboarding } = useOnboarding();
   const [clinicName, setClinicName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -314,8 +317,6 @@ const SignupClinic = () => {
           if (typeof parsed.password === 'string') setPassword(parsed.password);
           if (typeof parsed.city === 'string') setCity(parsed.city);
           if (typeof parsed.district === 'string') setDistrict(parsed.district);
-          if (parsed.errors && typeof parsed.errors === 'object') setErrors(parsed.errors);
-          if (parsed.missing && typeof parsed.missing === 'object') setMissing(parsed.missing);
           if (typeof parsed.mainLocationSaved === 'boolean') setMainLocationSaved(parsed.mainLocationSaved);
           if (Array.isArray(parsed.savedLocationIds)) setSavedLocationIds(parsed.savedLocationIds);
           if (parsed.services && typeof parsed.services === 'object') setServices(parsed.services);
@@ -345,41 +346,43 @@ const SignupClinic = () => {
   React.useEffect(() => {
     if (!draftReady) return;
 
-    const persistDraft = async () => {
-      try {
-        await AsyncStorage.setItem(
-          CLINIC_SIGNUP_DRAFT_KEY,
-          JSON.stringify({
-            clinicName,
-            email,
-            password,
-            city,
-            district,
-            errors,
-            missing,
-            mainLocationSaved,
-            savedLocationIds,
-            services,
-            customServices,
-            profileImage,
-            address,
-            phone,
-            workingHours,
-            doctors,
-            description,
-            socialUrl,
-            mapUrl,
-            latitudeInput,
-            longitudeInput,
-            extraLocations,
-          })
-        );
-      } catch (error) {
-        console.warn('Failed to persist clinic signup draft', error);
-      }
-    };
+    const timeoutId = setTimeout(() => {
+      const persistDraft = async () => {
+        try {
+          await AsyncStorage.setItem(
+            CLINIC_SIGNUP_DRAFT_KEY,
+            JSON.stringify({
+              clinicName,
+              email,
+              password,
+              city,
+              district,
+              mainLocationSaved,
+              savedLocationIds,
+              services,
+              customServices,
+              profileImage,
+              address,
+              phone,
+              workingHours,
+              doctors,
+              description,
+              socialUrl,
+              mapUrl,
+              latitudeInput,
+              longitudeInput,
+              extraLocations,
+            })
+          );
+        } catch (error) {
+          console.warn('Failed to persist clinic signup draft', error);
+        }
+      };
 
-    persistDraft();
+      void persistDraft();
+    }, 300);
+
+    return () => clearTimeout(timeoutId);
   }, [
     draftReady,
     clinicName,
@@ -387,8 +390,6 @@ const SignupClinic = () => {
     password,
     city,
     district,
-    errors,
-    missing,
     mainLocationSaved,
     savedLocationIds,
     services,
@@ -426,8 +427,11 @@ const SignupClinic = () => {
           if (primaryStored && active && !activePendingExtraLocationId) {
             const picked = JSON.parse(primaryStored);
             if (picked?.latitude !== undefined && picked?.longitude !== undefined) {
-              setLatitudeInput(String(picked.latitude));
-              setLongitudeInput(String(picked.longitude));
+              const nextLatitude = String(picked.latitude);
+              const nextLongitude = String(picked.longitude);
+              setLatitudeInput(nextLatitude);
+              setLongitudeInput(nextLongitude);
+              validateCoordinatesField(nextLatitude, nextLongitude);
             }
             if (hasMeaningfulText(picked?.mapUrl)) {
               setMapUrl(picked.mapUrl.trim());
@@ -618,6 +622,171 @@ const SignupClinic = () => {
     return Object.keys(newErrors).length === 0;
   };
 
+  const validateCoordinatesField = (latValue: string, lngValue: string) => {
+    const parsedLatitude = parseCoordinateValue(latValue);
+    const parsedLongitude = parseCoordinateValue(lngValue);
+    const hasAnyCoordinate = latValue.trim().length > 0 || lngValue.trim().length > 0;
+
+    if (!hasAnyCoordinate) {
+      setErrors((prev) => {
+        const next = { ...prev };
+        delete next.coordinates;
+        return next;
+      });
+      setMissing((prev) => ({ ...prev, latitudeInput: false, longitudeInput: false }));
+      return;
+    }
+
+    const coordinatesIncomplete = parsedLatitude === null || parsedLongitude === null;
+    const coordinatesInvalid = Number.isNaN(parsedLatitude) || Number.isNaN(parsedLongitude);
+    const coordinatesOutOfRange =
+      (!coordinatesIncomplete && !coordinatesInvalid) && (
+        parsedLatitude! < -90 || parsedLatitude! > 90 || parsedLongitude! < -180 || parsedLongitude! > 180
+      );
+
+    if (coordinatesIncomplete) {
+      setErrors((prev) => ({
+        ...prev,
+        coordinates: i18n.t('enterBothCoordinates') || 'Enter both latitude and longitude, or leave both blank.',
+      }));
+      setMissing((prev) => ({ ...prev, latitudeInput: true, longitudeInput: true }));
+      return;
+    }
+
+    if (coordinatesInvalid || coordinatesOutOfRange) {
+      setErrors((prev) => ({
+        ...prev,
+        coordinates: i18n.t('invalidCoordinates') || 'Enter valid map coordinates.',
+      }));
+      setMissing((prev) => ({ ...prev, latitudeInput: true, longitudeInput: true }));
+      return;
+    }
+
+    setErrors((prev) => {
+      const next = { ...prev };
+      delete next.coordinates;
+      return next;
+    });
+    setMissing((prev) => ({ ...prev, latitudeInput: false, longitudeInput: false }));
+  };
+
+  const validateServicesField = (
+    nextServices: typeof services = services,
+    nextCustomServices: typeof customServices = customServices
+  ) => {
+    const completedCustomServices = nextCustomServices.filter(
+      (service) => service.name?.trim() && service.price?.trim()
+    );
+    const hasSelectedService =
+      Object.entries(nextServices).some(([key, service]) => key !== 'other' && service.selected) ||
+      (nextServices.other?.selected && completedCustomServices.length > 0);
+
+    let error: string | null = null;
+    if (!hasSelectedService) {
+      error = i18n.t('atLeastOneServiceRequired') || 'At least one service must be selected';
+    } else {
+      const selectedServicesWithoutFees = Object.entries(nextServices)
+        .filter(([key, service]) => key !== 'other' && service.selected && (!service.fee || service.fee.trim() === ''));
+
+      const hasIncompleteCustomService = nextServices.other?.selected
+        ? nextCustomServices.some((service) => {
+            const hasAnyValue = Boolean(service.name?.trim() || service.price?.trim());
+            return hasAnyValue && (!service.name?.trim() || !service.price?.trim());
+          })
+        : false;
+
+      if (nextServices.other?.selected && completedCustomServices.length === 0) {
+        error = i18n.t('customServiceRequired') || 'Add at least one custom service and its price';
+      } else if (hasIncompleteCustomService) {
+        error = i18n.t('customServiceIncomplete') || 'Complete the custom service name and price';
+      } else if (selectedServicesWithoutFees.length > 0) {
+        error = i18n.t('feeRequiredForSelectedServices') || 'Fee is required for all selected services';
+      }
+    }
+
+    if (error) {
+      setErrors((prev) => ({ ...prev, services: error as string }));
+      setMissing((prev) => ({ ...prev, services: true }));
+      return;
+    }
+
+    setErrors((prev) => {
+      const next = { ...prev };
+      delete next.services;
+      return next;
+    });
+    setMissing((prev) => ({ ...prev, services: false }));
+  };
+
+  const validateDoctorsField = (nextDoctors: typeof doctors = doctors) => {
+    let error: string | null = null;
+    if (!nextDoctors.length) {
+      error = i18n.t('atLeastOneDoctorRequired') || 'At least one doctor is required';
+    } else {
+      const invalidDoctor = nextDoctors.findIndex((d) => !d.name || !d.name.trim());
+      if (invalidDoctor >= 0) {
+        error = i18n.t('doctorNameRequired') || 'Doctor name is required for all doctors';
+      }
+    }
+
+    if (error) {
+      setErrors((prev) => ({ ...prev, doctors: error as string }));
+      setMissing((prev) => ({ ...prev, doctors: true }));
+      return;
+    }
+
+    setErrors((prev) => {
+      const next = { ...prev };
+      delete next.doctors;
+      return next;
+    });
+    setMissing((prev) => ({ ...prev, doctors: false }));
+  };
+
+  const validateField = (field: keyof Errors, value: string) => {
+    let error: string | null = null;
+
+    switch (field) {
+      case 'clinicName':
+        error = validateRequired(value, i18n.t('clinic_name') || 'Clinic name');
+        break;
+      case 'email':
+        if (value && value.trim().length > 0) {
+          error = validateEmail(value);
+        }
+        break;
+      case 'password':
+        error = validatePassword(value);
+        break;
+      case 'city':
+        error = validateCity(value);
+        break;
+      case 'address':
+        error = validateAddress(value);
+        break;
+      case 'phone':
+        error = validatePhone(value);
+        break;
+      case 'socialUrl':
+        error = validateRequired(value, i18n.t('social_url') || 'Website / Social URL');
+        break;
+      default:
+        break;
+    }
+
+    if (error) {
+      setErrors((prev) => ({ ...prev, [field]: error as string }));
+      setMissing((prev) => ({ ...prev, [field]: true }));
+    } else {
+      setErrors((prev) => {
+        const next = { ...prev };
+        delete next[field];
+        return next;
+      });
+      setMissing((prev) => ({ ...prev, [field]: false }));
+    }
+  };
+
   const normalizedHours: Record<string, { from: string; to: string; doctors: string; off?: boolean }> = { ...workingHours };
   for (const day of Object.keys(normalizedHours)) {
     const config = normalizedHours[day];
@@ -801,6 +970,7 @@ const SignupClinic = () => {
 
       setLatitudeInput(lat);
       setLongitudeInput(lng);
+      validateCoordinatesField(lat, lng);
       setMainLocationSaved(false);
       setMissing((prev) => ({ ...prev, latitudeInput: false, longitudeInput: false }));
       setErrors((prev) => {
@@ -840,20 +1010,19 @@ const SignupClinic = () => {
       const authEmail = `user_${phoneForAuth}@forsa.app`;
 
       // Prevent duplicates across legacy/raw and canonical phone identities
+      const normalizedEmail = email.trim();
       const phoneCandidates = getPhoneIdentityCandidates(phone);
-      for (const candidate of phoneCandidates) {
-        const existingAuth = await lookupPhoneIndex(candidate);
-        if (existingAuth) {
-          throw { code: 'forsa/phone-already-in-use' };
-        }
+      const [existingPhoneMatches, existingEmailAuth] = await Promise.all([
+        Promise.all(phoneCandidates.map((candidate) => lookupPhoneIndex(candidate))),
+        normalizedEmail ? lookupEmailIndex(normalizedEmail) : Promise.resolve(null),
+      ]);
+      if (existingPhoneMatches.some(Boolean)) {
+        throw { code: 'forsa/phone-already-in-use' };
       }
 
       // Pre-check: if email provided, ensure it is not already taken
-      if (email && email.trim().length > 0) {
-        const existingAuth = await lookupEmailIndex(email.trim());
-        if (existingAuth) {
-          throw { code: 'forsa/email-already-in-use' };
-        }
+      if (existingEmailAuth) {
+        throw { code: 'forsa/email-already-in-use' };
       }
 
       const userCredential = await createUserWithEmailAndPassword(auth, authEmail, password);
@@ -969,31 +1138,31 @@ const SignupClinic = () => {
         updatedAt: new Date().toISOString(),
         ...geoFields,
       };
-      await setDoc(doc(db, 'users', uid), userData, { merge: true });
-      await setDoc(doc(db, 'clinics', uid), userData);
+      await Promise.all([
+        setDoc(doc(db, 'users', uid), userData, { merge: true }),
+        setDoc(doc(db, 'clinics', uid), userData),
+        normalizedEmail ? writeEmailIndex(normalizedEmail, authEmail) : Promise.resolve(),
+        writePhoneIndex(phoneForAuth, authEmail),
+      ]);
 
       // Save email → authEmail mapping
-      if (email && email.trim().length > 0) {
-        await writeEmailIndex(email.trim(), authEmail);
-      }
-      await writePhoneIndex(phoneForAuth, authEmail);
+      startOnboarding('clinic');
 
-      try {
-        await notifyAdminsOfNewSignup({
-          signupUserId: uid,
-          role: 'clinic',
-          userData,
-        });
-      } catch (error) {
+      void notifyAdminsOfNewSignup({
+        signupUserId: uid,
+        role: 'clinic',
+        userData,
+      }).catch((error) => {
         console.warn('[SignupClinic] Failed to notify admins about new signup:', error);
-      }
+      });
 
-      await AsyncStorage.multiRemove([
+      void AsyncStorage.multiRemove([
         CLINIC_SIGNUP_DRAFT_KEY,
         LOCATION_PICKER_RESULT_KEY,
         EXTRA_LOCATION_PICKER_RESULT_KEY,
-      ]);
-      router.replace('/clinic-feed');
+      ]).catch((error) => {
+        console.warn('[SignupClinic] Failed to clear signup draft:', error);
+      });
     } catch (err: any) {
       console.log('[Signup] Error:', err.message);
       let errorMsg = i18n.t('signupFailedMessage');
@@ -1135,10 +1304,16 @@ const SignupClinic = () => {
             </View>
           </View>
 
+          <SignupStepBar
+            currentStep={2}
+            totalSteps={3}
+            stepLabels={['Account Type', 'Your Profile', 'Get Started']}
+          />
+
           <ScrollView
             contentContainerStyle={styles.scrollContent}
-            keyboardShouldPersistTaps="always"
-            keyboardDismissMode="none"
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
             showsVerticalScrollIndicator={false}
           >
             {formError && (
@@ -1236,7 +1411,7 @@ const SignupClinic = () => {
                   <TextInput
                     style={styles.input}
                     value={clinicName}
-                    onChangeText={t => { setClinicName(t); if (missing.clinicName) setMissing(m => ({ ...m, clinicName: false })); }}
+                    onChangeText={t => { setClinicName(t); if (missing.clinicName) setMissing(m => ({ ...m, clinicName: false })); validateField('clinicName', t); }}
                     autoCapitalize="words"
                     placeholder={i18n.t('clinic_name_ph') || i18n.t('clinic_name')}
                     placeholderTextColor="#999"
@@ -1260,6 +1435,7 @@ const SignupClinic = () => {
                       const nextPhone = formatEgyptPhoneFromLocalInput(t);
                       setPhone(nextPhone);
                       if (missing.phone) setMissing(m => ({ ...m, phone: false }));
+                      validateField('phone', nextPhone);
                     }}
                     keyboardType="phone-pad"
                     placeholder="01XXXXXXXXX"
@@ -1294,6 +1470,7 @@ const SignupClinic = () => {
                           return newMissing;
                         });
                       }
+                      validateField('email', t);
                     }}
                     autoCapitalize="none"
                     keyboardType="email-address"
@@ -1314,7 +1491,7 @@ const SignupClinic = () => {
                   <TextInput
                     style={styles.input}
                     value={password}
-                    onChangeText={t => { setPassword(t); if (missing.password) setMissing(m => ({ ...m, password: false })); }}
+                    onChangeText={t => { setPassword(t); if (missing.password) setMissing(m => ({ ...m, password: false })); validateField('password', t); }}
                     secureTextEntry
                     placeholder={i18n.t('password_ph')}
                     placeholderTextColor="#999"
@@ -1410,6 +1587,7 @@ const SignupClinic = () => {
                               setCity(option.key);
                               setMainLocationSaved(false);
                               if (missing.city) setMissing(m => ({ ...m, city: false }));
+                              validateField('city', option.key);
                               setShowCityModal(false);
                             }}
                           >
@@ -1490,7 +1668,7 @@ const SignupClinic = () => {
                   <TextInput
                     style={styles.input}
                     value={address}
-                    onChangeText={t => { setAddress(t); setMainLocationSaved(false); if (missing.address) setMissing(m => ({ ...m, address: false })); }}
+                    onChangeText={t => { setAddress(t); setMainLocationSaved(false); if (missing.address) setMissing(m => ({ ...m, address: false })); validateField('address', t); }}
                     autoCapitalize="words"
                     placeholder={i18n.t('address_ph')}
                     placeholderTextColor="#999"
@@ -1523,7 +1701,7 @@ const SignupClinic = () => {
                   <TextInput
                     style={styles.input}
                     value={socialUrl}
-                    onChangeText={setSocialUrl}
+                    onChangeText={t => { setSocialUrl(t); if (missing.socialUrl) setMissing(m => ({ ...m, socialUrl: false })); validateField('socialUrl', t); }}
                     autoCapitalize="none"
                     placeholder="https://example.com or https://instagram.com/yourprofile"
                     placeholderTextColor="#999"
@@ -1833,6 +2011,11 @@ const SignupClinic = () => {
                           onPress={() => {
                             handleServiceToggle(key);
                             if (missing.services) setMissing(m => ({ ...m, services: false }));
+                            setErrors((prev) => {
+                              const next = { ...prev };
+                              delete next.services;
+                              return next;
+                            });
                           }}
                           style={styles.serviceMainRow}
                           activeOpacity={0.8}
@@ -1889,6 +2072,11 @@ const SignupClinic = () => {
                                     onChangeText={(val) => {
                                       handleCustomServiceChange(idx, 'name', val);
                                       if (missing.services) setMissing(m => ({ ...m, services: false }));
+                                      setErrors((prev) => {
+                                        const next = { ...prev };
+                                        delete next.services;
+                                        return next;
+                                      });
                                     }}
                                     style={styles.customServiceNameInput}
                                   />
@@ -1900,6 +2088,11 @@ const SignupClinic = () => {
                                     onChangeText={(val) => {
                                       handleCustomServiceChange(idx, 'price', val);
                                       if (missing.services) setMissing(m => ({ ...m, services: false }));
+                                      setErrors((prev) => {
+                                        const next = { ...prev };
+                                        delete next.services;
+                                        return next;
+                                      });
                                     }}
                                     style={styles.customServicePriceInput}
                                   />
@@ -1923,11 +2116,17 @@ const SignupClinic = () => {
                               keyboardType="numeric"
                               value={services[key]?.fee || ''}
                               onChangeText={(val) => {
-                                setServices((prev) => ({
-                                  ...prev,
-                                  [key]: { ...prev[key], fee: val },
-                                }));
+                                const nextServices = {
+                                  ...services,
+                                  [key]: { ...services[key], fee: val },
+                                };
+                                setServices(nextServices);
                                 if (missing.services) setMissing(m => ({ ...m, services: false }));
+                                setErrors((prev) => {
+                                  const next = { ...prev };
+                                  delete next.services;
+                                  return next;
+                                });
                               }}
                               style={[
                                 styles.feeInput,
@@ -1979,7 +2178,16 @@ const SignupClinic = () => {
                           style={{ flex: 2, borderWidth: 1, borderColor: '#ccc', borderRadius: 6, padding: 8, fontSize: 15, marginRight: 8, backgroundColor: '#fff' }}
                           placeholder={i18n.t('doctor_name') || 'Doctor Name'}
                           value={doc.name}
-                          onChangeText={v => setDoctors(prev => prev.map((d, i) => i === idx ? { ...d, name: v } : d))}
+                          onChangeText={v => {
+                            const nextDoctors = doctors.map((d, i) => i === idx ? { ...d, name: v } : d);
+                            setDoctors(nextDoctors);
+                            setErrors((prev) => {
+                              const next = { ...prev };
+                              delete next.doctors;
+                              return next;
+                            });
+                            setMissing((prev) => ({ ...prev, doctors: false }));
+                          }}
                         />
                         <TextInput
                           style={{ flex: 2, borderWidth: 1, borderColor: '#ccc', borderRadius: 6, padding: 8, fontSize: 15, marginRight: 8, backgroundColor: '#fff' }}
@@ -1987,7 +2195,16 @@ const SignupClinic = () => {
                           value={doc.major || ''}
                           onChangeText={v => setDoctors(prev => prev.map((d, i) => i === idx ? { ...d, major: v } : d))}
                         />
-                        <TouchableOpacity onPress={() => setDoctors(prev => prev.filter((_, i) => i !== idx))} style={{ padding: 6, backgroundColor: '#eee', borderRadius: 6 }}>
+                        <TouchableOpacity onPress={() => {
+                          const nextDoctors = doctors.filter((_, i) => i !== idx);
+                          setDoctors(nextDoctors);
+                          setErrors((prev) => {
+                            const next = { ...prev };
+                            delete next.doctors;
+                            return next;
+                          });
+                          setMissing((prev) => ({ ...prev, doctors: false }));
+                        }} style={{ padding: 6, backgroundColor: '#eee', borderRadius: 6 }}>
                           <Text style={{ color: '#e00', fontWeight: 'bold', fontSize: 18 }}>×</Text>
                         </TouchableOpacity>
                       </View>
@@ -2021,7 +2238,16 @@ const SignupClinic = () => {
                       />
                     </View>
                   ))}
-                  <TouchableOpacity onPress={() => setDoctors(prev => [...prev, { name: '', major: '' }])} style={{ padding: 10, backgroundColor: '#f4f4f4', borderRadius: 8, alignItems: 'center', marginTop: 4 }}>
+                  <TouchableOpacity onPress={() => {
+                    const nextDoctors = [...doctors, { name: '', major: '' }];
+                    setDoctors(nextDoctors);
+                    setErrors((prev) => {
+                      const next = { ...prev };
+                      delete next.doctors;
+                      return next;
+                    });
+                    setMissing((prev) => ({ ...prev, doctors: false }));
+                  }} style={{ padding: 10, backgroundColor: '#f4f4f4', borderRadius: 8, alignItems: 'center', marginTop: 4 }}>
                     <Text style={{ color: '#111', fontWeight: 'bold', fontSize: 15 }}>+ {i18n.t('add_doctor') || 'Add Doctor'}</Text>
                   </TouchableOpacity>
                 </View>

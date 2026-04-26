@@ -1,9 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import * as Location from 'expo-location';
 import Slider from '@react-native-community/slider';
-import React, { useEffect, useState } from 'react';
+import { getFirestore } from 'firebase/firestore';
+import { useRouter } from 'expo-router';
+import * as Location from 'expo-location';
+import React, { useEffect, useState } from 'react'; // Duplicate import removed
 import { Alert, FlatList, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
@@ -11,6 +12,8 @@ import i18n from '../locales/i18n';
 import { db } from '../lib/firebase';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import FootballLoader from '../components/FootballLoader';
+import SuspendedBadge from '../components/SuspendedBadge';
+import { isSuspendedEntity } from '../lib/suspension';
 
 const cities = Object.entries(i18n.t('cities', { returnObjects: true }) as Record<string, string>).map(([key, label]) => ({ key, label }));
 const cityOptions = cities.filter(({ key }) => !['giza', 'newCairo'].includes(key));
@@ -236,6 +239,8 @@ interface Academy {
   locations?: any[];
   privateTraining?: any;
   privateTrainings?: any[];
+  isSuspended?: boolean;
+  status?: string;
 }
 
 export default function PlayerSearchScreen() {
@@ -336,7 +341,11 @@ export default function PlayerSearchScreen() {
       try {
         const academiesRef = collection(db, 'academies');
         const q = query(academiesRef);
-        const querySnapshot = await getDocs(q);
+        const [querySnapshot, usersSnapshot] = await Promise.all([
+          getDocs(q),
+          getDocs(collection(db, 'users')),
+        ]);
+        const userMap = new Map(usersSnapshot.docs.map((userDoc) => [userDoc.id, userDoc.data()]));
 
         const programsRef = collection(db, 'academy_programs');
         const pQ = query(programsRef, where('type', '==', 'private_training'));
@@ -351,6 +360,7 @@ export default function PlayerSearchScreen() {
 
         querySnapshot.forEach((doc) => {
           const data = doc.data();
+          const userData = userMap.get(doc.id);
 
           academyList.push({
             id: doc.id,
@@ -368,6 +378,8 @@ export default function PlayerSearchScreen() {
             coordinates: data.coordinates || null,
             locations: Array.isArray(data.locations) ? data.locations : [],
             privateTraining: privateProgramsMap[doc.id] || null,
+            isSuspended: isSuspendedEntity({ ...data, ...userData }),
+            status: userData?.status || data.status || '',
           });
         });
       } catch (error) {
@@ -473,6 +485,18 @@ export default function PlayerSearchScreen() {
 
     setSortBy(sortKey);
     setSortModal(false);
+  };
+
+  const handleAcademyPress = (academy: Academy) => {
+    if (academy.isSuspended) {
+      Alert.alert(
+        i18n.t('suspendedBadge') || 'Suspended',
+        i18n.t('suspendedProviderUnavailable') || 'This provider is suspended and unavailable right now.'
+      );
+      return;
+    }
+
+    router.push({ pathname: '/academy-details', params: { academy: JSON.stringify(academy) } });
   };
 
   const filtered = academies
@@ -868,8 +892,8 @@ export default function PlayerSearchScreen() {
 
                 return (
                 <TouchableOpacity
-                  style={styles.card}
-                  onPress={() => router.push({ pathname: '/academy-details', params: { academy: JSON.stringify(item) } })}
+                  style={[styles.card, item.isSuspended && styles.cardSuspended]}
+                  onPress={() => handleAcademyPress(item)}
                   activeOpacity={0.9}
                 >
                   {/* Dark header strip */}
@@ -889,6 +913,11 @@ export default function PlayerSearchScreen() {
                   </View>
                   {/* Card body */}
                   <View style={styles.cardBody}>
+                    {item.isSuspended && (
+                      <View style={styles.cardSuspendedBadgeRow}>
+                        <SuspendedBadge />
+                      </View>
+                    )}
                     {/* Info chips */}
                     <View style={styles.cardChipsRow}>
                       <View style={styles.chip}>
@@ -1302,6 +1331,14 @@ const styles = StyleSheet.create({
     elevation: 6,
     overflow: 'hidden',
   },
+  cardSuspended: {
+    borderWidth: 1,
+    borderColor: 'rgba(252, 165, 165, 0.55)',
+    opacity: 0.9,
+  },
+  cardSuspendedBadgeRow: {
+    marginBottom: 12,
+  },
   cardHeaderStrip: {
     backgroundColor: '#111',
     flexDirection: 'row',
@@ -1430,4 +1467,54 @@ const styles = StyleSheet.create({
     color: 'rgba(255, 255, 255, 0.6)',
     marginTop: 8,
   },
+});
+
+// --- Player Search Screen (simple version for search by name/username) ---
+export function PlayerSimpleSearchScreen() {
+  const [search, setSearch] = useState('');
+  const [results, setResults] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const router = useRouter();
+
+  const handleSearch = async () => {
+    setLoading(true);
+    const db = getFirestore();
+    const q = query(collection(db, 'players'), where('searchKeywords', 'array-contains', search.toLowerCase()));
+    const snap = await getDocs(q);
+    setResults(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    setLoading(false);
+  };
+
+  return (
+    <View style={simpleStyles.container}>
+      <TextInput
+        style={simpleStyles.input}
+        placeholder="Search players by name or username"
+        value={search}
+        onChangeText={setSearch}
+        onSubmitEditing={handleSearch}
+        returnKeyType="search"
+      />
+      <FlatList
+        data={results}
+        keyExtractor={item => item.id}
+        renderItem={({ item }) => (
+          <TouchableOpacity style={simpleStyles.result} onPress={() => router.push({ pathname: '/player-profile', params: { uid: item.id } })}>
+            <Text style={simpleStyles.name}>{item.name || item.username || item.id}</Text>
+            <Text style={simpleStyles.meta}>{item.city || ''}</Text>
+          </TouchableOpacity>
+        )}
+        ListEmptyComponent={(!loading) ? <Text style={simpleStyles.empty}>No players found.</Text> : undefined}
+      />
+    </View>
+  );
+}
+
+const simpleStyles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#000', padding: 16 },
+  input: { backgroundColor: '#fff', borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 16 },
+  result: { padding: 14, borderBottomWidth: 1, borderBottomColor: '#222' },
+  name: { color: '#fff', fontSize: 17, fontWeight: 'bold' },
+  meta: { color: '#aaa', fontSize: 13 },
+  empty: { color: '#888', textAlign: 'center', marginTop: 40 },
 });

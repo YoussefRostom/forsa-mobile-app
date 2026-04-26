@@ -1,12 +1,14 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { doc, getDoc } from 'firebase/firestore';
+import * as Clipboard from 'expo-clipboard';
 import PureQRCode from '../components/PureQRCode';
 import { db } from '../lib/firebase';
 import { ensureCheckInCodeForCurrentUser } from '../services/CheckInCodeService';
 import FootballLoader from '../components/FootballLoader';
+import i18n from '../locales/i18n';
 
 const C = {
   bg: '#f0f4f8',
@@ -81,6 +83,15 @@ export default function BookingQrScreen() {
     ? deriveShortBookingCode(bookingId)
     : '';
 
+  const copyManualCode = async () => {
+    if (!manualEntryCode) return;
+    await Clipboard.setStringAsync(manualEntryCode);
+    Alert.alert(
+      i18n.t('copied') || 'Copied',
+      i18n.t('checkInCodeCopied') || 'Check-in code copied to clipboard'
+    );
+  };
+
   return (
     <View style={S.container}>
       <View style={S.card}>
@@ -117,8 +128,15 @@ export default function BookingQrScreen() {
             </View>
             <View style={S.manualCodeBox}>
               <Text style={S.manualCodeLabel}>Manual Booking Code (7 chars)</Text>
-              <Text selectable style={S.manualCodeValue}>{manualEntryCode}</Text>
+              <TouchableOpacity style={S.manualCodeRow} onPress={copyManualCode} activeOpacity={0.7}>
+                <Text selectable style={S.manualCodeValue}>{manualEntryCode}</Text>
+                <Ionicons name="copy-outline" size={18} color={C.blue} />
+              </TouchableOpacity>
             </View>
+            <TouchableOpacity style={S.copyButton} onPress={copyManualCode} activeOpacity={0.8}>
+              <Ionicons name="copy" size={18} color="#fff" />
+              <Text style={S.copyButtonText}>{i18n.t('copyCode') || 'Copy Code'}</Text>
+            </TouchableOpacity>
           </>
         )}
 
@@ -194,6 +212,29 @@ const S = StyleSheet.create({
     fontSize: 12,
     color: C.text,
     fontWeight: '600',
+  },
+  manualCodeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  copyButton: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: C.blue,
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    marginBottom: 14,
+  },
+  copyButtonText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '700',
   },
   infoBox: { width: '100%', borderRadius: 12, borderWidth: 1, borderColor: C.border, backgroundColor: '#fafcff', paddingVertical: 10, paddingHorizontal: 12, alignItems: 'center' },
   infoLabel: { fontSize: 11, color: C.muted, textTransform: 'uppercase', letterSpacing: 0.5 },

@@ -81,7 +81,7 @@ type IssueUser = {
     issueDetails?: string;
     issueMeta?: string;
     sourceReportId?: string;
-    reportTargetType?: 'post' | 'user';
+    reportTargetType?: 'post' | 'user' | 'academy' | 'clinic';
     reportTargetId?: string;
     targetUserId?: string;
 };
@@ -489,24 +489,38 @@ export default function AdminDashboard() {
 
                 const targetRows = reportRows
                     .map((r: any) => {
-                        const targetUserId = r?.targetType === 'user' ? r?.targetId : (r?.snapshot?.postOwnerId || null);
+                        const targetUserId = ['user', 'academy', 'clinic'].includes(String(r?.targetType || ''))
+                            ? r?.targetId
+                            : (r?.snapshot?.postOwnerId || null);
                         if (!targetUserId) return null;
 
                         const detailParts = [
                             r?.details,
                             r?.snapshot?.contentText,
-                            r?.targetType === 'user' && r?.snapshot?.reportedUserName
-                                ? `Reported user: ${r.snapshot.reportedUserName}`
-                                : null,
+                            r?.snapshot?.reportedTargetName
+                                ? `Reported target: ${r.snapshot.reportedTargetName}`
+                                : (r?.targetType === 'user' && r?.snapshot?.reportedUserName
+                                    ? `Reported user: ${r.snapshot.reportedUserName}`
+                                    : null),
                         ].filter(Boolean);
+
+                        const typeLabel = r?.targetType === 'post'
+                            ? 'Post report'
+                            : r?.targetType === 'academy'
+                                ? 'Academy report'
+                                : r?.targetType === 'clinic'
+                                    ? 'Clinic report'
+                                    : 'User report';
 
                         return {
                             userId: String(targetUserId),
                             issueLabel: formatReportReason(String(r?.reason || 'reported issue')),
                             issueDetails: detailParts.length > 0 ? String(detailParts[0]) : 'Open this report to inspect and moderate the exact problem.',
-                            issueMeta: `${r?.targetType === 'post' ? 'Post report' : 'User report'} • ${formatRecordDate(r?.createdAt)}`,
+                            issueMeta: `${typeLabel} • ${formatRecordDate(r?.createdAt)}`,
                             sourceReportId: r.id,
-                            reportTargetType: r?.targetType === 'user' ? 'user' : 'post',
+                            reportTargetType: ['post', 'user', 'academy', 'clinic'].includes(String(r?.targetType || ''))
+                                ? r.targetType
+                                : 'post',
                             reportTargetId: String(r?.targetId || ''),
                             targetUserId: String(targetUserId),
                         };
@@ -517,7 +531,7 @@ export default function AdminDashboard() {
                         issueDetails: string;
                         issueMeta: string;
                         sourceReportId?: string;
-                        reportTargetType: 'post' | 'user';
+                        reportTargetType: 'post' | 'user' | 'academy' | 'clinic';
                         reportTargetId: string;
                         targetUserId: string;
                     }[];

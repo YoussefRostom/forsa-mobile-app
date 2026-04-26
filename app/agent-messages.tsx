@@ -9,6 +9,8 @@ import {
   sendMessage,
   subscribeToMessages,
   markMessagesAsRead,
+  clearConversationUnreadCache,
+  deleteMessage,
   Message,
   findAdminUserId,
 } from '../services/MessagingService';
@@ -83,6 +85,7 @@ export default function AgentMessagesScreen() {
 
         // Subscribe to real-time messages
         if (convId) {
+          clearConversationUnreadCache(convId);
           unsubscribe = subscribeToMessages(convId, (msgs) => {
             setMessages(msgs);
             setLoading(false);
@@ -120,6 +123,43 @@ export default function AgentMessagesScreen() {
       }, 100);
     }
   }, [messages]);
+
+  const handleDeleteMessage = (message: Message) => {
+    if (!conversationIdState) return;
+
+    const createdAtMs = message.createdAt?.toDate ? message.createdAt.toDate().getTime() : 0;
+    if (!createdAtMs || Date.now() - createdAtMs > 10 * 60 * 1000) {
+      Alert.alert(
+        i18n.t('deleteMessage') || 'Delete message',
+        i18n.t('deleteTimeLimitReached') || 'You can delete messages only within 10 minutes.'
+      );
+      return;
+    }
+
+    Alert.alert(
+      i18n.t('deleteMessage') || 'Delete message',
+      i18n.t('deleteMessageConfirm') || 'Delete this message for everyone?',
+      [
+        { text: i18n.t('cancel') || 'Cancel', style: 'cancel' },
+        {
+          text: i18n.t('delete') || 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            deleteMessage(conversationIdState, message.id).catch((err: any) => {
+              if (err?.message === 'DELETE_WINDOW_EXPIRED') {
+                Alert.alert(
+                  i18n.t('deleteMessage') || 'Delete message',
+                  i18n.t('deleteTimeLimitReached') || 'You can delete messages only within 10 minutes.'
+                );
+                return;
+              }
+              console.warn('Delete message failed:', err);
+            });
+          },
+        },
+      ]
+    );
+  };
 
   const handleSendMessage = async () => {
     if (sending || !input.trim() || !conversationIdState) return;
@@ -203,6 +243,12 @@ export default function AgentMessagesScreen() {
                     </View>
                   )
                 )}
+                <TouchableOpacity
+                  activeOpacity={isSent ? 0.7 : 1}
+                  onLongPress={isSent ? () => handleDeleteMessage(item) : undefined}
+                  delayLongPress={400}
+                  style={{ maxWidth: '76%' }}
+                >
                 <View style={[
                   styles.bubble,
                   isSent ? styles.agentBubble : styles.playerBubble,
@@ -215,10 +261,11 @@ export default function AgentMessagesScreen() {
                   </Text>
                   {!!timeLabel && (
                     <Text style={isSent ? styles.messageMetaSent : styles.messageMetaReceived}>
-                      {timeLabel}{isSent ? ` • ${item.isRead ? (i18n.t('messageSeen') || 'Seen') : (i18n.t('messageSent') || 'Sent')}` : ''}
+                      {timeLabel}{isSent ? ` - ${item.isRead ? (i18n.t('messageSeen') || 'Seen') : (i18n.t('messageSent') || 'Sent')}` : ''}
                     </Text>
                   )}
                 </View>
+                </TouchableOpacity>
               </View>
             );
           }}

@@ -1,12 +1,15 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { collection, onSnapshot, getFirestore, orderBy, query, where } from 'firebase/firestore';
+import { collection, doc, getDoc, onSnapshot, getFirestore, orderBy, query, where } from 'firebase/firestore';
 import React, { useState, useRef } from 'react';
 import { Animated, FlatList, Image, KeyboardAvoidingView, Modal, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Video, ResizeMode } from 'expo-av';
 import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import PostActionsMenu from '../components/PostActionsMenu';
+import CommentsSheet from '../components/feed/CommentsSheet';
+import FeedAuthorAvatar from '../components/feed/FeedAuthorAvatar';
+import PostSocialActions from '../components/feed/PostSocialActions';
 import ZoomableFeedMedia from '../components/feed/ZoomableFeedMedia';
 import i18n from '../locales/i18n';
 import { auth } from '../lib/firebase';
@@ -20,6 +23,29 @@ const ClinicFeedScreen = () => {
   const fadeAnim = useRef(new Animated.Value(1)).current;
   const [clinicPosts, setClinicPosts] = useState<any[]>([]);
   const [adminPosts, setAdminPosts] = useState<any[]>([]);
+  const [commentsPostId, setCommentsPostId] = useState<string | null>(null);
+  const [currentUserName, setCurrentUserName] = useState<string>('');
+  const [currentUserPhoto, setCurrentUserPhoto] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    const user = auth.currentUser;
+    if (!user) return;
+    const db = getFirestore();
+    getDoc(doc(db, 'users', user.uid)).then((snap) => {
+      if (!snap.exists()) return;
+      const data = snap.data();
+      const fullName = `${data?.firstName || ''} ${data?.lastName || ''}`.trim();
+      const name = data?.clinicName || data?.name || fullName || data?.email || 'Clinic';
+      setCurrentUserName(name);
+      const photo = data?.profilePhoto || data?.profilePic || data?.photo || data?.avatarUrl || null;
+      setCurrentUserPhoto(photo);
+    }).catch(() => {});
+  }, []);
+
+  const getAuthorAvatarUri = (item: any) => {
+    const candidate = item?.authorPhoto || item?.ownerPhoto || item?.profilePhoto || item?.profilePic || item?.photo || item?.avatarUrl;
+    return typeof candidate === 'string' && candidate.length > 0 ? candidate : null;
+  };
 
   // Merge clinic posts and admin posts (deduplicate by post ID)
   React.useEffect(() => {
@@ -201,12 +227,13 @@ const ClinicFeedScreen = () => {
       : item.createdAt?.seconds 
         ? new Date(item.createdAt.seconds * 1000)
         : null;
+    const avatarUri = getAuthorAvatarUri(item);
 
     return (
       <View style={styles.feedCard}>
         <View style={styles.feedHeader}>
           <View style={styles.feedAuthorContainer}>
-            <Ionicons name="person-circle-outline" size={24} color="#000" />
+            <FeedAuthorAvatar uri={avatarUri} name={item.author} />
             <Text style={styles.feedAuthor}>{item.author || 'User'}</Text>
           </View>
           <View style={styles.feedHeaderRight}>
@@ -230,9 +257,28 @@ const ClinicFeedScreen = () => {
         <ZoomableFeedMedia post={item} />
         
         <Text style={styles.feedContent}>{item.content || ''}</Text>
+
+        {item.isRepost && (
+          <View style={styles.repostBanner}>
+            <Ionicons name="repeat-outline" size={13} color="#047857" />
+            <Text style={styles.repostBannerText}>
+              {i18n.t('repostedBy') || 'Reposted'}{item.originalAuthorName ? ` · ${item.originalAuthorName}` : ''}
+            </Text>
+          </View>
+        )}
+
+        <PostSocialActions
+          post={item}
+          onCommentPress={() => setCommentsPostId(item.id)}
+          currentUserName={currentUserName}
+          currentUserPhoto={currentUserPhoto}
+          viewerRole="clinic"
+        />
       </View>
     );
   };
+
+  const selectedCommentsPost = commentsPostId ? feed.find((p) => p.id === commentsPostId) : null;
 
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -280,6 +326,17 @@ const ClinicFeedScreen = () => {
           )}
         </Animated.View>
       </LinearGradient>
+
+      {commentsPostId && (
+        <CommentsSheet
+          postId={commentsPostId}
+          postOwnerId={selectedCommentsPost?.ownerId}
+          visible={!!commentsPostId}
+          onClose={() => setCommentsPostId(null)}
+          currentUserName={currentUserName}
+          currentUserPhoto={currentUserPhoto}
+        />
+      )}
 
       {/* Full Screen Media Viewer */}
       <Modal
@@ -411,6 +468,17 @@ const styles = StyleSheet.create({
     color: '#333',
     lineHeight: 22,
     marginTop: 12,
+  },
+  repostBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: 8,
+  },
+  repostBannerText: {
+    fontSize: 12,
+    color: '#047857',
+    fontWeight: '600',
   },
   feedTime: {
     fontSize: 12,

@@ -45,6 +45,8 @@ export default function AcademyEditProfileScreen({ academyName: academyNameProp 
   const router = useRouter();
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const [initialProfileState, setInitialProfileState] = useState('');
+  const [initialEmail, setInitialEmail] = useState('');
+  const [initialPhone, setInitialPhone] = useState('');
 
   const parseCoordinateValue = (value: string): number | null => {
     const normalized = value.trim().replace(/,/g, '.');
@@ -240,6 +242,8 @@ export default function AcademyEditProfileScreen({ academyName: academyNameProp 
         if (data.contactPerson) setContactPerson(data.contactPerson);
         if (data.phone) setPhone(data.phone);
         if (data.email) setEmail(data.email);
+        setInitialPhone(data.phone || '');
+        setInitialEmail(data.email || '');
         if (data.mapUrl) setMapUrl(data.mapUrl);
         setAcademyLocations(normalizeBookingBranches(data.locations || []));
 
@@ -409,8 +413,9 @@ export default function AcademyEditProfileScreen({ academyName: academyNameProp 
         fees: feesObj,
         schedule,
         contactPerson: contactPerson || null,
-        phone: phone || null,
-        email: email || null,
+        phone: initialPhone || null,
+        email: initialEmail || null,
+        emailLowercase: initialEmail.trim().toLowerCase() || null,
         academyName: academyName || null,
         username: resolveUserDisplayName({ academyName }, 'Academy'),
         // Removed city from main profile (now managed per-branch)
@@ -473,6 +478,10 @@ export default function AcademyEditProfileScreen({ academyName: academyNameProp 
         setProfilePic(finalProfilePicUrl);
         setProfilePicUrl(finalProfilePicUrl);
       }
+      setEmail(initialEmail || '');
+      setPhone(initialPhone || '');
+      setInitialEmail(initialEmail || '');
+      setInitialPhone(initialPhone || '');
       setInitialProfileState(serializeAcademyState({
         academyName,
         // Removed city from main profile (now managed per-branch)
@@ -481,8 +490,8 @@ export default function AcademyEditProfileScreen({ academyName: academyNameProp 
         latitudeInput,
         longitudeInput,
         contactPerson,
-        phone,
-        email,
+        phone: initialPhone || '',
+        email: initialEmail || '',
         prices,
         selected,
         schedule,
@@ -544,7 +553,6 @@ export default function AcademyEditProfileScreen({ academyName: academyNameProp 
         style={styles.gradient}
       >
         <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
-          {/* Header */}
           <View style={styles.header}>
             <TouchableOpacity style={styles.menuButton} onPress={openMenu}>
               <Ionicons name="menu" size={24} color="#fff" />
@@ -604,27 +612,25 @@ export default function AcademyEditProfileScreen({ academyName: academyNameProp 
               {/* Email */}
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>{i18n.t('email') || 'Email'}</Text>
-                <View style={styles.inputWrapper}>
+                <View style={[styles.inputWrapper, styles.disabledInputWrapper]}>
                   <Ionicons name="mail-outline" size={20} color="#999" style={styles.inputIcon} />
-                  <TextInput
-                    style={styles.input}
-                    value={email}
-                    onChangeText={setEmail}
-                    placeholder={i18n.t('emailPlaceholder') || 'Email'}
-                    placeholderTextColor="#999"
-                    keyboardType="email-address"
-                    autoCapitalize="none"
-                  />
+                  <Text style={styles.readOnlyValueText} selectable>
+                    {email || '-'}
+                  </Text>
                 </View>
+                <Text style={styles.helperText}>{i18n.t('signInEmailLockedHint') || 'Email changes are locked for now.'}</Text>
               </View>
 
               {/* Phone */}
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>{i18n.t('phone') || 'Phone'}</Text>
                 <View style={[styles.inputWrapper, styles.disabledInputWrapper]}>
-                  <Ionicons name="call-outline" size={20} color="#bbb" style={styles.inputIcon} />
-                  <Text style={styles.readOnlyValueText}>{phone || (i18n.t('phonePlaceholder') || 'Phone')}</Text>
+                  <Ionicons name="call-outline" size={20} color="#999" style={styles.inputIcon} />
+                  <Text style={styles.readOnlyValueText} selectable>
+                    {phone || '-'}
+                  </Text>
                 </View>
+                <Text style={styles.helperText}>{i18n.t('signInPhoneLockedHint') || 'Phone number changes are locked for now.'}</Text>
               </View>
 
               {/* Description */}

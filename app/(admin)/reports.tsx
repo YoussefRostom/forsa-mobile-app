@@ -22,6 +22,36 @@ import { formatTimestamp } from '../../lib/dateUtils';
 import i18n from '../../locales/i18n';
 import FootballLoader from '../../components/FootballLoader';
 
+function getTargetTypeLabel(targetType: Report['targetType']): string {
+  switch (targetType) {
+    case 'post':
+      return i18n.t('postReport') || 'Post Report';
+    case 'user':
+      return i18n.t('userReport') || 'User Report';
+    case 'academy':
+      return i18n.t('academyReport') || 'Academy Report';
+    case 'clinic':
+      return i18n.t('clinicReport') || 'Clinic Report';
+    default:
+      return i18n.t('report') || 'Report';
+  }
+}
+
+function getTargetTypeIcon(targetType: Report['targetType']) {
+  switch (targetType) {
+    case 'post':
+      return 'document-text' as const;
+    case 'user':
+      return 'person' as const;
+    case 'academy':
+      return 'school' as const;
+    case 'clinic':
+      return 'medical' as const;
+    default:
+      return 'flag' as const;
+  }
+}
+
 export default function AdminReportsScreen() {
   const router = useRouter();
   const [reports, setReports] = useState<Report[]>([]);
@@ -132,9 +162,7 @@ export default function AdminReportsScreen() {
           break;
 
         case 'suspend_user':
-          targetUserId = selectedReport.targetType === 'user' 
-            ? selectedReport.targetId 
-            : selectedReport.snapshot?.postOwnerId || null;
+          targetUserId = getTargetUserId(selectedReport);
           if (targetUserId) {
             await suspendUser(targetUserId, adminId, actionNote || 'Reported content');
             resolutionAction = 'user_suspended';
@@ -142,9 +170,7 @@ export default function AdminReportsScreen() {
           break;
 
         case 'unsuspend_user':
-          targetUserId = selectedReport.targetType === 'user' 
-            ? selectedReport.targetId 
-            : selectedReport.snapshot?.postOwnerId || null;
+          targetUserId = getTargetUserId(selectedReport);
           if (targetUserId) {
             await unsuspendUser(targetUserId, adminId, actionNote);
             resolutionAction = 'user_unsuspended';
@@ -192,7 +218,7 @@ export default function AdminReportsScreen() {
 
   const getTargetUserId = (report: Report | null): string | null => {
     if (!report) return null;
-    if (report.targetType === 'user') return report.targetId;
+    if (report.targetType === 'user' || report.targetType === 'academy' || report.targetType === 'clinic') return report.targetId;
     return report.snapshot?.postOwnerId ?? null;
   };
 
@@ -226,6 +252,7 @@ export default function AdminReportsScreen() {
   const renderReportItem = ({ item }: { item: Report }) => {
     const isPost = item.targetType === 'post';
     const snapshot = item.snapshot || {};
+    const targetName = snapshot.reportedTargetName || snapshot.reportedUserName;
 
     return (
       <TouchableOpacity
@@ -235,12 +262,12 @@ export default function AdminReportsScreen() {
         <View style={styles.reportHeader}>
           <View style={styles.reportHeaderLeft}>
             <Ionicons
-              name={isPost ? 'document-text' : 'person'}
+              name={getTargetTypeIcon(item.targetType)}
               size={20}
               color={item.status === 'open' ? '#FF3B30' : '#999'}
             />
             <Text style={styles.reportType}>
-              {isPost ? i18n.t('postReport') : i18n.t('userReport')}
+              {getTargetTypeLabel(item.targetType)}
             </Text>
             <View style={[styles.statusBadge, styles[`status${item.status}`]]}>
               <Text style={styles.statusText}>{item.status}</Text>
@@ -285,10 +312,10 @@ export default function AdminReportsScreen() {
           </View>
         )}
 
-        {!isPost && snapshot.reportedUserName && (
+        {!isPost && targetName && (
           <Text style={styles.reportedUser}>
-            <Text style={styles.label}>User: </Text>
-            {snapshot.reportedUserName}
+            <Text style={styles.label}>{i18n.t('reportedTargetLabel') || 'Target:'} </Text>
+            {targetName}
           </Text>
         )}
 
@@ -417,8 +444,13 @@ export default function AdminReportsScreen() {
                 <>
                   <Text style={styles.modalLabel}>{i18n.t('reportDetailsLabel')}</Text>
                   <Text style={styles.modalText}>
-                    {i18n.t('reportType')} {selectedReport.targetType === 'post' ? i18n.t('postReport') : i18n.t('userReport')}
+                    {i18n.t('reportType')} {getTargetTypeLabel(selectedReport.targetType)}
                   </Text>
+                  {!!(selectedReport.snapshot?.reportedTargetName || selectedReport.snapshot?.reportedUserName) && (
+                    <Text style={styles.modalText}>
+                      {i18n.t('reportedTargetLabel') || 'Target:'} {selectedReport.snapshot?.reportedTargetName || selectedReport.snapshot?.reportedUserName}
+                    </Text>
+                  )}
                   <Text style={styles.modalText}>{i18n.t('reportReasonLabel')} {selectedReport.reason}</Text>
                   {selectedReport.details && (
                     <Text style={styles.modalText}>{i18n.t('reportDetailsLabel2')} {selectedReport.details}</Text>

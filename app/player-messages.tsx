@@ -2,11 +2,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import React, { useRef, useState, useEffect } from 'react';
-import { Animated, Easing, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View, Image, Alert } from 'react-native';
+import { Animated, Easing, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View, Image, Alert, I18nManager } from 'react-native';
 import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import i18n from '../locales/i18n';
-import { subscribeToConversations, Conversation, findAdminUserId, getOrCreateConversation } from '../services/MessagingService';
+import { subscribeToConversations, Conversation, findAdminUserId, getOrCreateConversation, clearConversationUnreadCache } from '../services/MessagingService';
 import { auth } from '../lib/firebase';
 import FootballLoader from '../components/FootballLoader';
 
@@ -17,6 +17,7 @@ export default function PlayerMessagesScreen() {
   const [loading, setLoading] = useState(true);
   const [openingAdminChat, setOpeningAdminChat] = useState(false);
   const router = useRouter();
+  const isRTL = I18nManager.isRTL;
 
   const openAdminChat = async () => {
     if (openingAdminChat) return;
@@ -57,6 +58,21 @@ export default function PlayerMessagesScreen() {
       unsubscribe();
     };
   }, []);
+
+  const openConversation = (conversation: Conversation, displayName: string) => {
+    clearConversationUnreadCache(conversation.id);
+    setConversations((prev) =>
+      prev.map((item) => (item.id === conversation.id ? { ...item, unreadCount: 0 } : item))
+    );
+    router.push({
+      pathname: '/player-chat',
+      params: {
+        conversationId: conversation.id,
+        otherUserId: conversation.otherParticipantId || '',
+        name: displayName,
+      },
+    });
+  };
 
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -126,14 +142,7 @@ export default function PlayerMessagesScreen() {
                   <TouchableOpacity 
                     key={item.id}
                     style={styles.conversationCard} 
-                    onPress={() => router.push({ 
-                      pathname: '/player-chat', 
-                      params: { 
-                        conversationId: item.id, 
-                        otherUserId: item.otherParticipantId || '',
-                        name: displayName 
-                      } 
-                    })}
+                    onPress={() => openConversation(item, displayName)}
                     activeOpacity={0.8}
                   >
                     <View style={styles.avatarContainer}>
@@ -155,12 +164,12 @@ export default function PlayerMessagesScreen() {
                           {!!lastMsgTime && <Text style={styles.lastMessageTime}>{lastMsgTime}</Text>}
                           {unreadCount > 0 && (
                             <View style={styles.unreadBadge}>
-                              <Text style={styles.unreadText}>{unreadCount}</Text>
+                              <Text style={styles.unreadText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
                             </View>
                           )}
                         </View>
                       </View>
-                      <Text style={[styles.lastMessage, unreadCount > 0 && styles.lastMessageUnread]} numberOfLines={1}>
+                      <Text style={[styles.lastMessage, unreadCount > 0 && styles.lastMessageUnread, isRTL ? styles.textRtl : styles.textLtr]} numberOfLines={1}>
                         {lastMsg || 'No messages yet'}
                       </Text>
                   </View>
@@ -307,6 +316,14 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontSize: 16,
     color: '#000000',
+  },
+  textLtr: {
+    textAlign: 'left',
+    writingDirection: 'ltr',
+  },
+  textRtl: {
+    textAlign: 'right',
+    writingDirection: 'rtl',
   },
   conversationRole: {
     marginTop: 3,

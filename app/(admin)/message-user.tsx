@@ -9,8 +9,9 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { collection, getDocs, query, where } from 'firebase/firestore';
+import { collection, getDocs } from 'firebase/firestore';
 import { auth, db } from '../../lib/firebase';
+import { subscribeToConversations, Conversation } from '../../services/MessagingService';
 import FootballLoader from '../../components/FootballLoader';
 
 const C = {
@@ -62,12 +63,6 @@ type UserItem = {
     lastName?: string;
 };
 
-type RecentChat = {
-    otherUserId: string;
-    lastMessage: string;
-    lastMessageAtMs: number;
-};
-
 const resolveDisplayName = (user: UserItem) => {
     const fullName = `${user.firstName || ''} ${user.lastName || ''}`.trim();
 
@@ -95,7 +90,7 @@ export default function AdminMessageUserScreen() {
     const [search, setSearch] = useState('');
     const [roleFilter, setRoleFilter] = useState<'all' | 'player' | 'parent' | 'academy' | 'clinic' | 'agent' | 'admin'>('all');
     const [users, setUsers] = useState<UserItem[]>([]);
-    const [recentChats, setRecentChats] = useState<RecentChat[]>([]);
+    const [recentChats, setRecentChats] = useState<Conversation[]>([]);
 
     const toMillis = (value: any) => {
         if (!value) return 0;
@@ -126,32 +121,6 @@ export default function AdminMessageUserScreen() {
                     .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) } as UserItem))
                     .filter((item) => item.id !== currentUid);
 
-                const recentMap = new Map<string, RecentChat>();
-                if (currentUid) {
-                    const [aSnap, bSnap] = await Promise.all([
-                        getDocs(query(collection(db, 'conversations'), where('participant1Id', '==', currentUid))),
-                        getDocs(query(collection(db, 'conversations'), where('participant2Id', '==', currentUid))),
-                    ]);
-
-                    [...aSnap.docs, ...bSnap.docs].forEach((docSnap) => {
-                        const data: any = docSnap.data();
-                        const p1 = String(data?.participant1Id || '');
-                        const p2 = String(data?.participant2Id || '');
-                        const otherUserId = p1 === currentUid ? p2 : p1;
-                        if (!otherUserId || otherUserId === currentUid) return;
-
-                        const lastMessageAtMs = toMillis(data?.lastMessageAt || data?.updatedAt || data?.createdAt);
-                        const previous = recentMap.get(otherUserId);
-                        if (!previous || lastMessageAtMs > previous.lastMessageAtMs) {
-                            recentMap.set(otherUserId, {
-                                otherUserId,
-                                lastMessage: String(data?.lastMessage || '').trim(),
-                                lastMessageAtMs,
-                            });
-                        }
-                    });
-                }
-
                 next.sort((a, b) => {
                     const roleA = safeRole(a.role);
                     const roleB = safeRole(b.role);
@@ -160,17 +129,25 @@ export default function AdminMessageUserScreen() {
                 });
 
                 setUsers(next);
-                setRecentChats(Array.from(recentMap.values()).sort((a, b) => b.lastMessageAtMs - a.lastMessageAtMs).slice(0, 8));
             } catch (error) {
                 console.error('Error fetching users for messaging:', error);
                 setUsers([]);
-                setRecentChats([]);
             } finally {
                 setLoading(false);
             }
         };
 
         void loadUsers();
+    }, []);
+
+    useEffect(() => {
+        const unsubscribe = subscribeToConversations((conversations) => {
+            setRecentChats(conversations.slice(0, 8));
+        });
+
+        return () => {
+            unsubscribe();
+        };
     }, []);
 
     const roleCounts = useMemo(() => {
@@ -211,11 +188,12 @@ export default function AdminMessageUserScreen() {
         const usersById = new Map(users.map((item) => [item.id, item] as const));
         return recentChats
             .map((chat) => {
-                const user = usersById.get(chat.otherUserId);
+                const otherUserId = chat.otherParticipantId;
+                const user = otherUserId ? usersById.get(otherUserId) : null;
                 if (!user) return null;
                 return { user, chat };
             })
-            .filter(Boolean) as { user: UserItem; chat: RecentChat }[];
+            .filter(Boolean) as { user: UserItem; chat: Conversation }[];
     }, [users, recentChats]);
 
     const renderUserRow = ({ item }: { item: UserItem }) => {
@@ -353,7 +331,7 @@ export default function AdminMessageUserScreen() {
                                             <Text style={S.recentMessage} numberOfLines={1}>
                                                 {item.chat.lastMessage || 'Open chat'}
                                             </Text>
-                                            <Text style={S.recentTime}>{formatRecentTime(item.chat.lastMessageAtMs)}</Text>
+                                            <Text style={S.recentTime}>{formatRecentTime(toMillis(item.chat.lastMessageAt || item.chat.createdAt))}</Text>
                                         </TouchableOpacity>
                                     );
                                 }}

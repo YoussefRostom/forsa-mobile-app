@@ -10,6 +10,8 @@ import { buildBookingBranchPayload, getBranchAddressLine, getBranchSummary, norm
 import { doc, getDoc } from 'firebase/firestore';
 import { createBookingWithTransaction, getLocalDateInput } from '../services/MonetizationService';
 import FootballLoader from '../components/FootballLoader';
+import SuspendedBadge from '../components/SuspendedBadge';
+import { isSuspendedEntity } from '../lib/suspension';
 
 export default function PlayerPrivateTrainingDetailsScreen() {
   const params = useLocalSearchParams();
@@ -37,6 +39,7 @@ export default function PlayerPrivateTrainingDetailsScreen() {
   const branches = normalizeBookingBranches(academy?.locations);
   const assignedProgramBranch = resolveRecordBranch(program, branches);
   const selectedBranch = branches.find((branch) => branch.id === selectedBranchId) || null;
+  const academySuspended = isSuspendedEntity(academy);
 
   useEffect(() => {
     const defaultBranchId = assignedProgramBranch?.id || branches[0]?.id || '';
@@ -54,9 +57,13 @@ export default function PlayerPrivateTrainingDetailsScreen() {
         setProgram(progData);
         
         if (progData.academyId) {
-          const accDoc = await getDoc(doc(db, 'academies', progData.academyId));
+          const [accDoc, userDoc] = await Promise.all([
+            getDoc(doc(db, 'academies', progData.academyId)),
+            getDoc(doc(db, 'users', progData.academyId)),
+          ]);
+          const userData = userDoc.exists() ? userDoc.data() : {};
           if (accDoc.exists()) {
-            setAcademy({ id: accDoc.id, ...accDoc.data() });
+            setAcademy({ id: accDoc.id, ...accDoc.data(), isSuspended: userData?.isSuspended === true, status: userData?.status || '' });
           }
         }
       }
@@ -97,6 +104,10 @@ export default function PlayerPrivateTrainingDetailsScreen() {
       Alert.alert(i18n.t('error'), i18n.t('loginRequired') || 'You must be logged in to book');
       return;
     }
+    if (academySuspended) {
+      Alert.alert(i18n.t('error') || 'Error', i18n.t('suspendedProviderBookingUnavailable') || 'This provider is suspended and cannot receive bookings right now.');
+      return;
+    }
 
     const bookingBranch = assignedProgramBranch || selectedBranch;
 
@@ -104,6 +115,11 @@ export default function PlayerPrivateTrainingDetailsScreen() {
       Alert.alert(i18n.t('error') || 'Error', i18n.t('selectBranch') || 'Please select a branch');
       return;
     }
+
+    Alert.alert(
+      i18n.t('keepAppOpenTitle') || 'Keep App Open',
+      i18n.t('keepAppOpenBookingMessage') || 'Please keep the app open until the reservation finishes.'
+    );
 
     try {
       setBookingLoading(true);
@@ -193,6 +209,7 @@ export default function PlayerPrivateTrainingDetailsScreen() {
                 <View style={styles.detailContent}>
                   <Text style={styles.detailLabel}>{i18n.t('academyLabel') || 'Academy'}</Text>
                   <Text style={styles.detailValue}>{academy.academyName || academy.name}</Text>
+                  {academySuspended && <SuspendedBadge tone="light" />}
                 </View>
               </View>
 
@@ -295,10 +312,10 @@ export default function PlayerPrivateTrainingDetailsScreen() {
             </View>
 
             <TouchableOpacity
-              style={[styles.reserveButton, bookingLoading && styles.reserveButtonDisabled]}
+              style={[styles.reserveButton, (bookingLoading || academySuspended) && styles.reserveButtonDisabled]}
               onPress={handleBookPrivateTraining}
               activeOpacity={0.8}
-              disabled={bookingLoading}
+              disabled={bookingLoading || academySuspended}
             >
               {bookingLoading ? (
                 <FootballLoader size="small" color="#fff" />

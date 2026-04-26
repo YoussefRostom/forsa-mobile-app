@@ -40,6 +40,7 @@ type OwnedMedia = MediaDoc & { postId?: string | null; content?: string };
 export default function AdminMyMediaScreen() {
   const router = useRouter();
   const [mediaList, setMediaList] = useState<OwnedMedia[]>([]);
+  const [activeFilter, setActiveFilter] = useState<'photos' | 'videos'>('photos');
   const [loading, setLoading] = useState(true);
   const [editingMedia, setEditingMedia] = useState<{ id: string; content: string; postId: string | null } | null>(null);
   const [editCaption, setEditCaption] = useState('');
@@ -115,6 +116,9 @@ export default function AdminMyMediaScreen() {
     const videos = mediaList.filter((m) => m.resourceType === 'video').length;
     return { total: mediaList.length, images, videos };
   }, [mediaList]);
+  const photoMedia = useMemo(() => mediaList.filter((m) => m.resourceType === 'image'), [mediaList]);
+  const videoMedia = useMemo(() => mediaList.filter((m) => m.resourceType === 'video'), [mediaList]);
+  const filteredMedia = activeFilter === 'photos' ? photoMedia : videoMedia;
 
   const handleEdit = (media: OwnedMedia) => {
     setEditingMedia({ id: media.id, content: media.content || '', postId: media.postId || null });
@@ -161,6 +165,45 @@ export default function AdminMyMediaScreen() {
     );
   };
 
+  const renderMediaCard = (media: OwnedMedia) => (
+    <View key={media.id} style={S.mediaCard}>
+      <TouchableOpacity
+        style={S.mediaPreview}
+        onPress={() => setFullScreenMedia({ uri: media.secureUrl, type: media.resourceType })}
+      >
+        {media.resourceType === 'image' ? (
+          <Image source={{ uri: media.secureUrl }} style={S.mediaThumbnail} />
+        ) : (
+          <View style={S.videoThumbnail}>
+            <Ionicons name="videocam" size={28} color="#fff" />
+            <Text style={S.videoLabel}>{i18n.t('video') || 'Video'}</Text>
+          </View>
+        )}
+      </TouchableOpacity>
+
+      <View style={S.mediaInfo}>
+        <Text style={S.mediaType}>{media.resourceType === 'image' ? (i18n.t('image') || 'Image') : (i18n.t('video') || 'Video')}</Text>
+        {!!media.content && <Text style={S.mediaCaption} numberOfLines={2}>{media.content}</Text>}
+        <Text style={S.mediaDate}>
+          {media.createdAt?.toDate ? media.createdAt.toDate().toLocaleDateString() : (i18n.t('unknownDate') || 'Unknown date')}
+        </Text>
+      </View>
+
+      <View style={S.actions}>
+        <TouchableOpacity style={S.editButton} onPress={() => handleEdit(media)} disabled={deleting === media.id}>
+          <Ionicons name="create-outline" size={18} color={C.blue} />
+        </TouchableOpacity>
+        <TouchableOpacity style={S.deleteButton} onPress={() => handleDelete(media)} disabled={deleting === media.id}>
+          {deleting === media.id ? (
+            <FootballLoader size="small" color={C.red} />
+          ) : (
+            <Ionicons name="trash-outline" size={18} color={C.red} />
+          )}
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+
   if (loading) {
     return (
       <View style={S.center}>
@@ -202,44 +245,44 @@ export default function AdminMyMediaScreen() {
             </TouchableOpacity>
           </View>
         ) : (
-          mediaList.map((media) => (
-            <View key={media.id} style={S.mediaCard}>
+          <>
+            <View style={S.filterTabs}>
               <TouchableOpacity
-                style={S.mediaPreview}
-                onPress={() => setFullScreenMedia({ uri: media.secureUrl, type: media.resourceType })}
+                style={[S.filterTab, activeFilter === 'photos' && S.filterTabActive]}
+                onPress={() => setActiveFilter('photos')}
+                activeOpacity={0.85}
               >
-                {media.resourceType === 'image' ? (
-                  <Image source={{ uri: media.secureUrl }} style={S.mediaThumbnail} />
-                ) : (
-                  <View style={S.videoThumbnail}>
-                    <Ionicons name="videocam" size={28} color="#fff" />
-                    <Text style={S.videoLabel}>{i18n.t('video') || 'Video'}</Text>
-                  </View>
-                )}
-              </TouchableOpacity>
-
-              <View style={S.mediaInfo}>
-                <Text style={S.mediaType}>{media.resourceType === 'image' ? (i18n.t('image') || 'Image') : (i18n.t('video') || 'Video')}</Text>
-                {!!media.content && <Text style={S.mediaCaption} numberOfLines={2}>{media.content}</Text>}
-                <Text style={S.mediaDate}>
-                  {media.createdAt?.toDate ? media.createdAt.toDate().toLocaleDateString() : (i18n.t('unknownDate') || 'Unknown date')}
+                <Ionicons name="images-outline" size={16} color={activeFilter === 'photos' ? '#ffffff' : C.text} />
+                <Text style={[S.filterTabText, activeFilter === 'photos' && S.filterTabTextActive]}>
+                  {i18n.t('PhotoSection') || i18n.t('photos') || 'Photos'} ({photoMedia.length})
                 </Text>
-              </View>
-
-              <View style={S.actions}>
-                <TouchableOpacity style={S.editButton} onPress={() => handleEdit(media)} disabled={deleting === media.id}>
-                  <Ionicons name="create-outline" size={18} color={C.blue} />
-                </TouchableOpacity>
-                <TouchableOpacity style={S.deleteButton} onPress={() => handleDelete(media)} disabled={deleting === media.id}>
-                  {deleting === media.id ? (
-                    <FootballLoader size="small" color={C.red} />
-                  ) : (
-                    <Ionicons name="trash-outline" size={18} color={C.red} />
-                  )}
-                </TouchableOpacity>
-              </View>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[S.filterTab, activeFilter === 'videos' && S.filterTabActive]}
+                onPress={() => setActiveFilter('videos')}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="play-circle-outline" size={16} color={activeFilter === 'videos' ? '#ffffff' : C.text} />
+                <Text style={[S.filterTabText, activeFilter === 'videos' && S.filterTabTextActive]}>
+                  {i18n.t('VideoSection') || i18n.t('videos') || 'Videos'} ({videoMedia.length})
+                </Text>
+              </TouchableOpacity>
             </View>
-          ))
+
+            <View style={S.mediaSection}>
+              {filteredMedia.length === 0 ? (
+                <View style={S.sectionEmptyState}>
+                  <Text style={S.sectionEmptyText}>
+                    {activeFilter === 'photos'
+                      ? (i18n.t('noPhotos') || 'No photos uploaded yet.')
+                      : (i18n.t('noVideos') || 'No videos uploaded yet.')}
+                  </Text>
+                </View>
+              ) : (
+                filteredMedia.map(renderMediaCard)
+              )}
+            </View>
+          </>
         )}
       </ScrollView>
 
@@ -325,6 +368,51 @@ const S = StyleSheet.create({
   emptySub: { marginTop: 4, color: C.subtext, textAlign: 'center' },
   primaryButton: { marginTop: 16, backgroundColor: C.text, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10 },
   primaryButtonText: { color: '#fff', fontSize: 13, fontWeight: '700' },
+  filterTabs: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 16,
+  },
+  filterTab: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: C.card,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: C.border,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+  },
+  filterTabActive: {
+    backgroundColor: C.blue,
+    borderColor: C.blue,
+  },
+  filterTabText: {
+    color: C.text,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  filterTabTextActive: {
+    color: '#ffffff',
+  },
+  mediaSection: { marginBottom: 18 },
+  sectionEmptyState: {
+    backgroundColor: C.card,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: C.border,
+    paddingVertical: 18,
+    paddingHorizontal: 16,
+    marginBottom: 8,
+  },
+  sectionEmptyText: {
+    color: C.subtext,
+    fontSize: 14,
+    textAlign: 'center',
+  },
 
   mediaCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: C.card, borderRadius: 14, borderWidth: 1, borderColor: C.border, padding: 10, marginBottom: 10 },
   mediaPreview: { width: 88, height: 88, borderRadius: 10, overflow: 'hidden', marginRight: 10, backgroundColor: '#e5e7eb' },

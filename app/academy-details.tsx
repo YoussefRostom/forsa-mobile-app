@@ -11,6 +11,9 @@ import i18n from '../locales/i18n';
 import { LinearGradient } from 'expo-linear-gradient';
 import { addPendingBooking, completePendingBooking, failPendingBooking } from '../lib/pendingBookingStore';
 import FootballLoader from '../components/FootballLoader';
+import ReportModal from '../components/ReportModal';
+import SuspendedBadge from '../components/SuspendedBadge';
+import { isSuspendedEntity } from '../lib/suspension';
 
 type Academy = {
   id: string;
@@ -41,6 +44,8 @@ type Academy = {
     longitude?: number | null;
   }[];
   profilePhoto?: string;
+  isSuspended?: boolean;
+  status?: string;
 };
 
 function formatTimeForDisplay(time24: string): string {
@@ -66,6 +71,7 @@ export default function AcademyDetailsScreen() {
   const [ageModalVisible, setAgeModalVisible] = useState(false);
   const [bookingLoading, setBookingLoading] = useState(false);
   const [privateBookingLoadingId, setPrivateBookingLoadingId] = useState<string | null>(null);
+  const [reportModalVisible, setReportModalVisible] = useState(false);
   const scrollViewRef = useRef<ScrollView | null>(null);
   const postsSectionRef = useRef<View | null>(null);
   const cityLabels = i18n.t('cities', { returnObjects: true }) as Record<string, string>;
@@ -201,6 +207,8 @@ export default function AcademyDetailsScreen() {
     const fetchAcademy = async () => {
       try {
         const academyDoc = await getDoc(doc(db, 'academies', parsed!.id));
+        const userDoc = await getDoc(doc(db, 'users', parsed!.id));
+        const userData = userDoc.exists() ? userDoc.data() : {};
         if (academyDoc.exists()) {
           const data = academyDoc.data();
           setAcademy({
@@ -222,6 +230,8 @@ export default function AcademyDetailsScreen() {
             locations: data.locations || [],
             images: data.images || [],
             profilePhoto: data.profilePhoto || '',
+            isSuspended: userData?.isSuspended === true,
+            status: userData?.status || '',
           });
           setOfferings(data.offerings || []);
           setPosts(data.posts || []);
@@ -266,6 +276,7 @@ export default function AcademyDetailsScreen() {
 
   const branches = normalizeBookingBranches(academy?.locations);
   const selectedBranch = branches.find((branch) => branch.id === selectedBranchId) || null;
+  const academySuspended = isSuspendedEntity(academy);
 
   useEffect(() => {
     const defaultBranchId = branches[0]?.id || '';
@@ -319,11 +330,20 @@ export default function AcademyDetailsScreen() {
       Alert.alert(i18n.t('error'), i18n.t('loginRequired') || 'You must be logged in to book');
       return;
     }
+    if (academySuspended) {
+      Alert.alert(i18n.t('error') || 'Error', i18n.t('suspendedProviderBookingUnavailable') || 'This provider is suspended and cannot receive bookings right now.');
+      return;
+    }
 
     if (branches.length > 0 && !selectedBranch) {
       Alert.alert(i18n.t('error') || 'Error', i18n.t('selectBranch') || 'Please select a branch');
       return;
     }
+
+    Alert.alert(
+      i18n.t('keepAppOpenTitle') || 'Keep App Open',
+      i18n.t('keepAppOpenBookingMessage') || 'Please keep the app open until the reservation finishes.'
+    );
 
     setBookingLoading(true);
 
@@ -403,11 +423,20 @@ export default function AcademyDetailsScreen() {
       Alert.alert(i18n.t('error'), i18n.t('loginRequired') || 'You must be logged in to book');
       return;
     }
+    if (academySuspended) {
+      Alert.alert(i18n.t('error') || 'Error', i18n.t('suspendedProviderBookingUnavailable') || 'This provider is suspended and cannot receive bookings right now.');
+      return;
+    }
 
     if (branches.length > 0 && !selectedBranch) {
       Alert.alert(i18n.t('error') || 'Error', i18n.t('selectBranch') || 'Please select a branch');
       return;
     }
+
+    Alert.alert(
+      i18n.t('keepAppOpenTitle') || 'Keep App Open',
+      i18n.t('keepAppOpenBookingMessage') || 'Please keep the app open until the reservation finishes.'
+    );
 
     // Fetch user name from Firestore
     let playerName = user.displayName || 'Player';
@@ -501,6 +530,7 @@ export default function AcademyDetailsScreen() {
               )}
             </View>
             <Text style={styles.academyName}>{academy.name}</Text>
+            {academySuspended && <SuspendedBadge />}
             <View style={styles.locationRow}>
               <Ionicons name="location" size={16} color="rgba(255,255,255,0.7)" />
               <Text style={styles.locationText}>{[academy.district, getCityLabel(academy.city)].filter(Boolean).join(', ') || getCityLabel(academy.city)}</Text>
@@ -515,17 +545,27 @@ export default function AcademyDetailsScreen() {
                 </Text>
               </View>
             </View>
-            {academy.phone && (
+            <View style={styles.headerActionsRow}>
+              {academy.phone && (
+                <TouchableOpacity
+                  style={styles.contactButton}
+                  onPress={() => setShowPhone(!showPhone)}
+                >
+                  <Ionicons name="call-outline" size={20} color="#000" />
+                  <Text style={styles.contactButtonText}>
+                    {showPhone ? academy.phone : (i18n.t('showPhone') || 'Show Phone')}
+                  </Text>
+                </TouchableOpacity>
+              )}
               <TouchableOpacity
-                style={styles.contactButton}
-                onPress={() => setShowPhone(!showPhone)}
+                style={styles.reportButton}
+                onPress={() => setReportModalVisible(true)}
+                activeOpacity={0.85}
               >
-                <Ionicons name="call-outline" size={20} color="#000" />
-                <Text style={styles.contactButtonText}>
-                  {showPhone ? academy.phone : (i18n.t('showPhone') || 'Show Phone')}
-                </Text>
+                <Ionicons name="flag-outline" size={18} color="#ffb4b4" />
+                <Text style={styles.reportButtonText}>{i18n.t('reportAcademy') || 'Report Academy'}</Text>
               </TouchableOpacity>
-            )}
+            </View>
           </View>
 
           {/* Main Content Card */}
@@ -749,10 +789,10 @@ export default function AcademyDetailsScreen() {
                         </Text>
                       </View>
                       <TouchableOpacity
-                        style={[styles.bookProgramButton, (bookingLoading || privateBookingLoadingId === program.id) && { opacity: 0.6 }]}
+                        style={[styles.bookProgramButton, (academySuspended || bookingLoading || privateBookingLoadingId === program.id) && { opacity: 0.6 }]}
                         onPress={() => handleBookPrivateTraining(program)}
                         activeOpacity={0.8}
-                        disabled={bookingLoading || privateBookingLoadingId === program.id}
+                        disabled={academySuspended || bookingLoading || privateBookingLoadingId === program.id}
                       >
                         {privateBookingLoadingId === program.id ? (
                           <FootballLoader color="#fff" />
@@ -771,6 +811,11 @@ export default function AcademyDetailsScreen() {
 
             {/* ====== BOOKING OPTIONS SECTION ====== */}
             <View style={styles.bookingSection}>
+              {academySuspended && (
+                <View style={styles.suspensionNotice}>
+                  <Text style={styles.suspensionNoticeText}>{i18n.t('suspendedProviderBookingUnavailable') || 'This provider is suspended and cannot receive bookings right now.'}</Text>
+                </View>
+              )}
               <Text style={styles.bookingSectionTitle}>{i18n.t('bookNow') || 'Book Now'}</Text>
               <Text style={styles.bookingSectionSubtitle}>{i18n.t('chooseBookingOption') || 'Choose your preferred booking option'}</Text>
 
@@ -835,9 +880,9 @@ export default function AcademyDetailsScreen() {
                   )}
 
                   <TouchableOpacity
-                    style={[styles.reserveButton, (!selectedAge || bookingLoading) && styles.reserveButtonDisabled]}
+                    style={[styles.reserveButton, (!selectedAge || bookingLoading || academySuspended) && styles.reserveButtonDisabled]}
                     onPress={handleReserve}
-                    disabled={!selectedAge || bookingLoading}
+                    disabled={!selectedAge || bookingLoading || academySuspended}
                   >
                     {bookingLoading ? (
                       <FootballLoader color="#fff" />
@@ -913,6 +958,17 @@ export default function AcademyDetailsScreen() {
             </TouchableOpacity>
           </Modal>
         </ScrollView>
+        <ReportModal
+          visible={reportModalVisible}
+          onClose={() => setReportModalVisible(false)}
+          targetType="academy"
+          targetId={academy.id}
+          targetLabel={academy.name}
+          snapshot={{
+            reportedTargetName: academy.name,
+            reportedTargetRole: 'academy',
+          }}
+        />
       </LinearGradient>
     </View>
   );
@@ -1042,6 +1098,29 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#000',
+  },
+  headerActionsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: 10,
+    width: '100%',
+  },
+  reportButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(255, 82, 82, 0.14)',
+    borderRadius: 24,
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 82, 82, 0.35)',
+  },
+  reportButtonText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#ffb4b4',
   },
   contentCard: {
     backgroundColor: '#fff',
@@ -1460,6 +1539,20 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
     marginBottom: 20,
+  },
+  suspensionNotice: {
+    marginBottom: 14,
+    backgroundColor: '#fef2f2',
+    borderColor: '#fecaca',
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+  },
+  suspensionNoticeText: {
+    color: '#b91c1c',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
   },
   bookingOptionsContainer: {
     gap: 16,

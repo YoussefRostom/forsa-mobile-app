@@ -6,7 +6,7 @@ import { Animated, Easing, FlatList, KeyboardAvoidingView, Platform, StyleSheet,
 import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import i18n from '../locales/i18n';
-import { subscribeToConversations, Conversation, findAdminUserId, getOrCreateConversation } from '../services/MessagingService';
+import { subscribeToConversations, Conversation, findAdminUserId, getOrCreateConversation, clearConversationUnreadCache } from '../services/MessagingService';
 import { auth } from '../lib/firebase';
 import FootballLoader from '../components/FootballLoader';
 
@@ -56,6 +56,10 @@ export default function AcademyMessagesScreen() {
   }, []);
 
   const handleContactPress = (conv: Conversation) => {
+    clearConversationUnreadCache(conv.id);
+    setConversations((prev) =>
+      prev.map((item) => (item.id === conv.id ? { ...item, unreadCount: 0 } : item))
+    );
     router.push({ 
       pathname: '/academy-chat', 
       params: { 

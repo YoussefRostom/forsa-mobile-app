@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
-import { FlatList, Image, Keyboard, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { FlatList, Image, Keyboard, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View, Alert, I18nManager } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
@@ -11,6 +11,9 @@ import {
   sendMessage, 
   subscribeToMessages, 
   warmCurrentUserChatProfile,
+  markMessagesAsRead,
+  clearConversationUnreadCache,
+  deleteMessage,
   Message 
   
 } from '../services/MessagingService';
@@ -26,13 +29,15 @@ const styles = StyleSheet.create({
   messageRowReceived: { justifyContent: 'flex-start' },
   messageAvatar: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#e5e5e5', justifyContent: 'center', alignItems: 'center', marginRight: 8, marginBottom: 8 },
   messageAvatarImage: { width: 30, height: 30, borderRadius: 15, marginRight: 8, marginBottom: 8 },
-  bubble: { maxWidth: '78%', paddingVertical: 12, paddingHorizontal: 14, borderRadius: 20, shadowColor: '#000000', shadowOpacity: 0.06, shadowRadius: 8, elevation: 2 },
+  bubble: { maxWidth: '82%', minWidth: 84, paddingVertical: 12, paddingHorizontal: 14, borderRadius: 20, shadowColor: '#000000', shadowOpacity: 0.06, shadowRadius: 8, elevation: 2 },
   bubbleSent: { backgroundColor: '#000000', alignSelf: 'flex-end', borderTopRightRadius: 6 },
   bubbleReceived: { backgroundColor: '#fff', alignSelf: 'flex-start', borderTopLeftRadius: 6, borderWidth: 1, borderColor: '#e5e7eb' },
-  textSent: { color: '#fff', fontSize: 15, fontWeight: '500', lineHeight: 21 },
-  textReceived: { color: '#111111', fontSize: 15, fontWeight: '500', lineHeight: 21 },
+  textSent: { color: '#fff', fontSize: 15, fontWeight: '500', lineHeight: 21, letterSpacing: 0, includeFontPadding: false },
+  textReceived: { color: '#111111', fontSize: 15, fontWeight: '500', lineHeight: 21, letterSpacing: 0, includeFontPadding: false },
+  textLtr: { textAlign: 'left', writingDirection: 'ltr' },
+  textRtl: { textAlign: 'right', writingDirection: 'rtl' },
   inputRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.98)', paddingHorizontal: 14, paddingVertical: 12, borderTopWidth: 1, borderTopColor: '#dcdcdc', zIndex: 10, shadowColor: '#000000', shadowOpacity: 0.06, shadowRadius: 10, elevation: 6 },
-  input: { flex: 1, borderWidth: 1, borderColor: '#d9d9d9', borderRadius: 24, paddingHorizontal: 16, paddingVertical: 14, marginRight: 10, color: '#000000', backgroundColor: '#f5f5f5', fontSize: 16 },
+  input: { flex: 1, minHeight: 48, borderWidth: 1, borderColor: '#d9d9d9', borderRadius: 24, paddingHorizontal: 16, paddingVertical: 14, marginRight: 10, color: '#000000', backgroundColor: '#f5f5f5', fontSize: 16, letterSpacing: 0, includeFontPadding: false },
   sendBtn: { width: 48, height: 48, backgroundColor: '#000000', borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
   sendBtnDisabled: { opacity: 0.55 },
   sendBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 17 },
@@ -108,6 +113,7 @@ export default function PlayerChatScreen() {
   const [sending, setSending] = useState(false);
   const [conversationIdState, setConversationIdState] = useState<string | null>(null);
   const flatListRef = useRef<FlatList>(null);
+  const isRTL = I18nManager.isRTL;
 
   const scrollToConversationEnd = () => {
     setTimeout(() => {
@@ -143,6 +149,7 @@ export default function PlayerChatScreen() {
 
         // Subscribe to real-time messages
         if (convId) {
+          clearConversationUnreadCache(convId);
           unsubscribe = subscribeToMessages(convId, (msgs) => {
             setMessages(msgs);
             setLoading(false);
@@ -150,6 +157,10 @@ export default function PlayerChatScreen() {
               scrollToConversationEnd();
             }
           });
+
+          markMessagesAsRead(convId).catch((err) =>
+            console.warn('Failed to mark player chat messages as read on open:', err)
+          );
         }
       } catch (error: any) {
         console.error('Error initializing chat:', error);
@@ -187,6 +198,43 @@ export default function PlayerChatScreen() {
       scrollToConversationEnd();
     }
   }, [messages]);
+
+  const handleDeleteMessage = (message: Message) => {
+    if (!conversationIdState) return;
+
+    const createdAtMs = message.createdAt?.toDate ? message.createdAt.toDate().getTime() : 0;
+    if (!createdAtMs || Date.now() - createdAtMs > 10 * 60 * 1000) {
+      Alert.alert(
+        i18n.t('deleteMessage') || 'Delete message',
+        i18n.t('deleteTimeLimitReached') || 'You can delete messages only within 10 minutes.'
+      );
+      return;
+    }
+
+    Alert.alert(
+      i18n.t('deleteMessage') || 'Delete message',
+      i18n.t('deleteMessageConfirm') || 'Delete this message for everyone?',
+      [
+        { text: i18n.t('cancel') || 'Cancel', style: 'cancel' },
+        {
+          text: i18n.t('delete') || 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            deleteMessage(conversationIdState, message.id).catch((err: any) => {
+              if (err?.message === 'DELETE_WINDOW_EXPIRED') {
+                Alert.alert(
+                  i18n.t('deleteMessage') || 'Delete message',
+                  i18n.t('deleteTimeLimitReached') || 'You can delete messages only within 10 minutes.'
+                );
+                return;
+              }
+              console.warn('Delete message failed:', err);
+            });
+          },
+        },
+      ]
+    );
+  };
 
   const handleSendMessage = async () => {
     if (sending || !input.trim() || !conversationIdState) return;
@@ -309,16 +357,23 @@ export default function PlayerChatScreen() {
                     </View>
                   )
                 )}
+                <TouchableOpacity
+                  activeOpacity={isSent ? 0.7 : 1}
+                  onLongPress={isSent ? () => handleDeleteMessage(item) : undefined}
+                  delayLongPress={400}
+                  style={{ maxWidth: '78%' }}
+                >
                 <View style={[styles.bubble, isSent ? styles.bubbleSent : styles.bubbleReceived]}>
-                  <Text style={isSent ? styles.textSent : styles.textReceived}>
+                  <Text style={[isSent ? styles.textSent : styles.textReceived, isRTL ? styles.textRtl : styles.textLtr]}>
                     {item.content || (item.mediaUrl ? 'Media' : '')}
                   </Text>
                   {!!timeLabel && (
-                    <Text style={isSent ? styles.messageMetaSent : styles.messageMetaReceived}>
-                      {timeLabel}{isSent ? ` • ${item.isRead ? (i18n.t('messageSeen') || 'Seen') : (i18n.t('messageSent') || 'Sent')}` : ''}
+                    <Text style={[isSent ? styles.messageMetaSent : styles.messageMetaReceived, isRTL ? styles.textRtl : styles.textLtr]}>
+                      {timeLabel}{isSent ? ` - ${item.isRead ? (i18n.t('messageSeen') || 'Seen') : (i18n.t('messageSent') || 'Sent')}` : ''}
                     </Text>
                   )}
                 </View>
+                </TouchableOpacity>
               </View>
             );
           }}
@@ -338,7 +393,7 @@ export default function PlayerChatScreen() {
       {/* Input Bar */}
       <View style={styles.inputRow}>
         <TextInput
-          style={styles.input}
+          style={[styles.input, isRTL ? styles.textRtl : styles.textLtr]}
           value={input}
           onChangeText={setInput}
           placeholder={i18n.t('typeMessage') || 'Type a message...'}

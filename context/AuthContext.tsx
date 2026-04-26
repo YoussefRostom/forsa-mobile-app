@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { onAuthStateChanged, signOut, type User as FirebaseUser } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, onSnapshot } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import { isExpectedNetworkError } from '../lib/networkErrors';
 import { captureAppException } from '../services/CrashReportingService';
@@ -102,9 +102,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let isMounted = true;
     setIsLoading(true);
+    let unsubscribeUserDoc: (() => void) | null = null;
 
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (!isMounted) return;
+
+      if (unsubscribeUserDoc) {
+        unsubscribeUserDoc();
+        unsubscribeUserDoc = null;
+      }
 
       if (!firebaseUser) {
         setUser(null);
@@ -117,10 +123,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       setUser(nextUser);
       setIsLoading(false);
+
+      unsubscribeUserDoc = onSnapshot(
+        doc(db, 'users', firebaseUser.uid),
+        async () => {
+          if (!isMounted) return;
+          const refreshedUser = await buildUserFromFirebase(firebaseUser);
+          if (!isMounted) return;
+          setUser(refreshedUser);
+        },
+        () => {
+          // Keep current session data if realtime sync fails.
+        }
+      );
     });
 
     return () => {
       isMounted = false;
+      if (unsubscribeUserDoc) {
+        unsubscribeUserDoc();
+      }
       unsubscribe();
     };
   }, []);

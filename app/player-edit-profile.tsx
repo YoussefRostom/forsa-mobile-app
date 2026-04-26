@@ -1,1 +1,1 @@
-export { default } from './player-profile';
+export { default } from './player-edit-profile-screen';

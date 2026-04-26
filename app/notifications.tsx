@@ -25,6 +25,8 @@ import { getOrCreateConversation } from '../services/MessagingService';
 import { getCurrentUserRole } from '../services/UserRoleService';
 import { formatTimestamp } from '../lib/dateUtils';
 import FootballLoader from '../components/FootballLoader';
+import { db } from '../lib/firebase';
+import { doc, getDoc } from 'firebase/firestore';
 
 const typeToIcon: Record<NotificationType, string> = {
   booking: 'calendar',
@@ -123,6 +125,48 @@ export default function NotificationsScreen() {
       // Navigate based on notification type and current user role (stay in own profile)
       const role = await getCurrentUserRole().catch(() => null);
 
+      const chatRoute =
+        role === 'parent' ? '/parent-chat' :
+        role === 'clinic' ? '/clinic-chat' :
+        role === 'academy' ? '/academy-chat' :
+        role === 'agent' ? '/agent-messages' :
+        '/player-chat';
+
+      const notificationKind = String(item.data?.notificationKind || '');
+
+      if (notificationKind === 'follow' && item.data?.actorId) {
+        const actorId = String(item.data.actorId);
+        const actorRole = String(item.data.actorRole || 'player');
+        const actorName = String(item.data.actorName || item.body || 'User');
+        router.push({
+          pathname: '/agent-user-posts',
+          params: { ownerId: actorId, ownerRole: actorRole, userName: actorName },
+        } as any);
+        return;
+      }
+
+      if (notificationKind === 'chat' || item.data?.conversationId || item.data?.senderId) {
+        const senderId = item.data?.senderId ? String(item.data.senderId) : '';
+        const conversationId = item.data?.conversationId
+          ? String(item.data.conversationId)
+          : senderId
+            ? await getOrCreateConversation(senderId)
+            : '';
+
+        const otherUserId = senderId || (() => {
+          const parts = conversationId.split('_');
+          const current = auth.currentUser?.uid;
+          return parts[0] === current ? parts[1] : parts[0];
+        })();
+
+        if (role === 'admin') {
+          router.push({ pathname: '/(admin)/user-chat', params: { otherUserId, name: item.title || 'User' } } as any);
+        } else {
+          router.push({ pathname: chatRoute as any, params: { conversationId, otherUserId, name: item.title || 'User', contact: item.title || 'User' } } as any);
+        }
+        return;
+      }
+
       if (item.type === 'booking' && item.data?.bookingId) {
         const bookingRoute =
           role === 'parent' ? '/parent-bookings' :
@@ -149,24 +193,19 @@ export default function NotificationsScreen() {
         return;
       }
 
-      if ((item.data?.senderId || item.data?.conversationId) && role === 'admin') {
-        const senderId = item.data?.senderId;
-        if (senderId) {
-          const senderIdStr = String(senderId);
-          await getOrCreateConversation(senderIdStr);
-          router.push({ pathname: '/(admin)/user-chat', params: { otherUserId: senderIdStr, name: item.title || 'User' } } as any);
-          return;
-        }
+      if (item.data?.postId) {
+        const postId = String(item.data.postId);
+        const postSnap = await getDoc(doc(db, 'posts', postId)).catch(() => null);
+        const postData = postSnap?.exists() ? postSnap.data() : {};
+        const ownerId = String(postData?.ownerId || auth.currentUser?.uid || '');
+        const ownerRole = String(postData?.ownerRole || 'player');
+        const userName = String(postData?.author || item.title || 'Player');
 
-        if (item.data?.conversationId) {
-          const parts = String(item.data.conversationId).split('_');
-          const current = auth.currentUser?.uid;
-          const other = parts[0] === current ? parts[1] : parts[0];
-          if (other) {
-            router.push({ pathname: '/(admin)/user-chat', params: { otherUserId: other, name: item.title || 'User' } } as any);
-            return;
-          }
-        }
+        router.push({
+          pathname: '/agent-user-posts',
+          params: { ownerId, ownerRole, userName, focusPostId: postId },
+        } as any);
+        return;
       }
     } catch (error) {
       console.error('Failed to open notification target', error);

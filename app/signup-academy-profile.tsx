@@ -4,6 +4,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
+import { useOnboarding } from '../context/OnboardingContext';
 import { doc, setDoc, collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import { resolveUserDisplayName } from '../lib/userDisplayName';
@@ -45,6 +46,7 @@ import { uploadMedia } from '../services/MediaService';
 import i18n from '../locales/i18n';
 import { buildBookingBranchPayload, getBranchSummary, normalizeBookingBranches } from '../lib/bookingBranch';
 import FootballLoader from '../components/FootballLoader';
+import SignupStepBar from '../components/SignupStepBar';
 import { notifyAdminsOfNewSignup } from '../services/SignupNotificationService';
 
 const LOCATION_PICKER_RESULT_KEY = 'academySignupLocationPickerResult';
@@ -96,6 +98,7 @@ const districtsByCity: Record<string, { key: string; label: string }[]> = {
 
 const SignupAcademy = () => {
   const router = useRouter();
+  const { startOnboarding } = useOnboarding();
   const params = useLocalSearchParams();
 
   const parseCoordinateValue = (value: string): number | null => {
@@ -258,40 +261,44 @@ const SignupAcademy = () => {
   useEffect(() => {
     if (!draftReady) return;
 
-    const persistDraft = async () => {
-      try {
-        await AsyncStorage.setItem(
-          ACADEMY_SIGNUP_DRAFT_KEY,
-          JSON.stringify({
-            academyName,
-            email,
-            phone,
-            password,
-            city,
-            district,
-            address,
-            description,
-            socialUrl,
-            mapUrl,
-            latitudeInput,
-            longitudeInput,
-            fees,
-            profileImage,
-            extraLocations,
-            mainLocationSaved,
-            savedLocationIds,
-            privateTrainings,
-            selectedAge,
-            privateTrainingEnabled,
-            bulkFeeValue,
-          })
-        );
-      } catch (error) {
-        console.warn('Failed to persist academy signup draft', error);
-      }
-    };
+    const timeoutId = setTimeout(() => {
+      const persistDraft = async () => {
+        try {
+          await AsyncStorage.setItem(
+            ACADEMY_SIGNUP_DRAFT_KEY,
+            JSON.stringify({
+              academyName,
+              email,
+              phone,
+              password,
+              city,
+              district,
+              address,
+              description,
+              socialUrl,
+              mapUrl,
+              latitudeInput,
+              longitudeInput,
+              fees,
+              profileImage,
+              extraLocations,
+              mainLocationSaved,
+              savedLocationIds,
+              privateTrainings,
+              selectedAge,
+              privateTrainingEnabled,
+              bulkFeeValue,
+            })
+          );
+        } catch (error) {
+          console.warn('Failed to persist academy signup draft', error);
+        }
+      };
 
-    persistDraft();
+      void persistDraft();
+    }, 300);
+
+    return () => clearTimeout(timeoutId);
   }, [
     draftReady,
     academyName,
@@ -337,8 +344,11 @@ const SignupAcademy = () => {
           if (primaryStored && active && !activePendingExtraLocationId) {
             const picked = JSON.parse(primaryStored);
             if (picked?.latitude !== undefined && picked?.longitude !== undefined) {
-              setLatitudeInput(String(picked.latitude));
-              setLongitudeInput(String(picked.longitude));
+              const nextLatitude = String(picked.latitude);
+              const nextLongitude = String(picked.longitude);
+              setLatitudeInput(nextLatitude);
+              setLongitudeInput(nextLongitude);
+              validateCoordinatesField(nextLatitude, nextLongitude);
             }
             if (picked?.mapUrl) setMapUrl(picked.mapUrl);
             setErrors((prev) => {
@@ -404,7 +414,8 @@ const SignupAcademy = () => {
 
   const handleFeeChange = (age: string, value: string) => {
     const sanitizedValue = value.replace(/[^0-9]/g, '');
-    setFees((prev) => ({ ...prev, [age]: sanitizedValue }));
+    const nextFees = { ...fees, [age]: sanitizedValue };
+    setFees(nextFees);
 
     if (missing.fees && sanitizedValue.trim()) {
       setMissing((prev) => ({ ...prev, fees: false }));
@@ -424,15 +435,13 @@ const SignupAcademy = () => {
     if (!normalizedValue) return;
 
     setBulkFeeValue(normalizedValue);
-    setFees((prev) => {
-      const next = { ...prev };
-      ageGroups.forEach((age) => {
-        if (!next[age]?.trim()) {
-          next[age] = normalizedValue;
-        }
-      });
-      return next;
+    const nextFees = { ...fees };
+    ageGroups.forEach((age) => {
+      if (!nextFees[age]?.trim()) {
+        nextFees[age] = normalizedValue;
+      }
     });
+    setFees(nextFees);
 
     setMissing((prev) => ({ ...prev, fees: false }));
     setErrors((prev) => {
@@ -445,6 +454,7 @@ const SignupAcademy = () => {
   const clearAllFees = () => {
     setFees({});
     setSelectedAge(null);
+    validateFeesField({});
   };
 
   const cityOptions = Object.entries(i18n.t('cities', { returnObjects: true }) as Record<string, string>).map(([key, label]) => ({ key, label }));
@@ -742,6 +752,7 @@ const SignupAcademy = () => {
 
       setLatitudeInput(lat);
       setLongitudeInput(lng);
+      validateCoordinatesField(lat, lng);
       setMainLocationSaved(false);
       setMissing((prev) => ({ ...prev, latitudeInput: false, longitudeInput: false }));
       setErrors((prev) => {
@@ -850,6 +861,117 @@ const SignupAcademy = () => {
     return Object.keys(newErrors).length === 0;
   };
 
+  const validateCoordinatesField = (latValue: string, lngValue: string) => {
+    const parsedLatitude = parseCoordinateValue(latValue);
+    const parsedLongitude = parseCoordinateValue(lngValue);
+    const hasAnyCoordinate = latValue.trim().length > 0 || lngValue.trim().length > 0;
+
+    if (!hasAnyCoordinate) {
+      setErrors((prev) => {
+        const next = { ...prev };
+        delete next.coordinates;
+        return next;
+      });
+      setMissing((prev) => ({ ...prev, latitudeInput: false, longitudeInput: false }));
+      return;
+    }
+
+    const coordinatesIncomplete = parsedLatitude === null || parsedLongitude === null;
+    const coordinatesInvalid = Number.isNaN(parsedLatitude) || Number.isNaN(parsedLongitude);
+    const coordinatesOutOfRange =
+      (!coordinatesIncomplete && !coordinatesInvalid) && (
+        parsedLatitude! < -90 || parsedLatitude! > 90 || parsedLongitude! < -180 || parsedLongitude! > 180
+      );
+
+    if (coordinatesIncomplete) {
+      setErrors((prev) => ({
+        ...prev,
+        coordinates: i18n.t('enterBothCoordinates') || 'Enter both latitude and longitude, or leave both blank.',
+      }));
+      setMissing((prev) => ({ ...prev, latitudeInput: true, longitudeInput: true }));
+      return;
+    }
+
+    if (coordinatesInvalid || coordinatesOutOfRange) {
+      setErrors((prev) => ({
+        ...prev,
+        coordinates: i18n.t('invalidCoordinates') || 'Enter valid map coordinates.',
+      }));
+      setMissing((prev) => ({ ...prev, latitudeInput: true, longitudeInput: true }));
+      return;
+    }
+
+    setErrors((prev) => {
+      const next = { ...prev };
+      delete next.coordinates;
+      return next;
+    });
+    setMissing((prev) => ({ ...prev, latitudeInput: false, longitudeInput: false }));
+  };
+
+  const validateFeesField = (nextFees: typeof fees = fees) => {
+    const hasFee = Object.values(nextFees).some((value) => value && value.trim() !== '');
+    if (!hasFee) {
+      setErrors((prev) => ({
+        ...prev,
+        fees: i18n.t('atLeastOneFeeRequired') || 'At least one fee must be entered',
+      }));
+      setMissing((prev) => ({ ...prev, fees: true }));
+      return;
+    }
+
+    setErrors((prev) => {
+      const next = { ...prev };
+      delete next.fees;
+      return next;
+    });
+    setMissing((prev) => ({ ...prev, fees: false }));
+  };
+
+  const validateField = (field: string, value: string) => {
+    let error: string | null = null;
+
+    switch (field) {
+      case 'academyName':
+        error = validateRequired(value, i18n.t('academy_name') || 'Academy name');
+        break;
+      case 'email':
+        if (value && value.trim().length > 0) {
+          error = validateEmail(value);
+        }
+        break;
+      case 'phone':
+        error = validatePhone(value);
+        break;
+      case 'password':
+        error = validatePassword(value);
+        break;
+      case 'city':
+        error = validateCity(value);
+        break;
+      case 'address':
+        error = validateAddress(value);
+        break;
+      case 'socialUrl':
+        error = validateRequired(value, i18n.t('social_url') || 'Website / Social URL');
+        break;
+      default:
+        break;
+    }
+
+    if (error) {
+      setErrors((prev) => ({ ...prev, [field]: error as string }));
+      setMissing((prev) => ({ ...prev, [field]: true }));
+    } else {
+      setErrors((prev) => {
+        const next = { ...prev };
+        delete next[field];
+        return next;
+      });
+      setMissing((prev) => ({ ...prev, [field]: false }));
+    }
+  };
+
   const handleSignup = async () => {
     if (!validate()) {
       Alert.alert(i18n.t('missingFields'), i18n.t('fillAllRequiredFields'));
@@ -868,12 +990,17 @@ const SignupAcademy = () => {
           : `user_${phoneForAuth}@forsa.app`;
 
       // Prevent duplicates across legacy/raw and canonical phone identities
+      const normalizedEmail = email.trim();
       const phoneCandidates = getPhoneIdentityCandidates(phone);
-      for (const candidate of phoneCandidates) {
-        const existingAuth = await lookupPhoneIndex(candidate);
-        if (existingAuth) {
-          throw { code: 'forsa/phone-already-in-use' };
-        }
+      const [existingPhoneMatches, existingEmailAuth] = await Promise.all([
+        Promise.all(phoneCandidates.map((candidate) => lookupPhoneIndex(candidate))),
+        normalizedEmail ? lookupEmailIndex(normalizedEmail) : Promise.resolve(null),
+      ]);
+      if (existingPhoneMatches.some(Boolean)) {
+        throw { code: 'forsa/phone-already-in-use' };
+      }
+      if (existingEmailAuth) {
+        throw { code: 'forsa/email-already-in-use' };
       }
 
       const userCredential = await createUserWithEmailAndPassword(auth, authEmail, password);
@@ -977,67 +1104,68 @@ const SignupAcademy = () => {
         updatedAt: new Date().toISOString(),
         ...geoFields,
       };
-      await setDoc(doc(db, 'users', uid), userData, { merge: true });
-      await setDoc(doc(db, 'academies', uid), userData);
+      await Promise.all([
+        setDoc(doc(db, 'users', uid), userData, { merge: true }),
+        setDoc(doc(db, 'academies', uid), userData),
+        normalizedEmail ? writeEmailIndex(normalizedEmail, authEmail) : Promise.resolve(),
+        writePhoneIndex(phoneForAuth, authEmail),
+      ]);
 
       // Save email → authEmail mapping for sign-in by email
-      if (email && email.trim().length > 0) {
-        await writeEmailIndex(email.trim(), authEmail);
-      }
       // Save phone → authEmail mapping so sign-in by phone works (e.g. account created with email + phone)
-      await writePhoneIndex(phoneForAuth, authEmail);
+      startOnboarding('academy');
 
-      try {
-        await notifyAdminsOfNewSignup({
-          signupUserId: uid,
-          role: 'academy',
-          userData,
-        });
-      } catch (error) {
+      void notifyAdminsOfNewSignup({
+        signupUserId: uid,
+        role: 'academy',
+        userData,
+      }).catch((error) => {
         console.warn('[SignupAcademy] Failed to notify admins about new signup:', error);
-      }
+      });
 
-      // Step 4: Create private training programs for each valid entry
-      for (const training of privateTrainings) {
-        if (training.coachName && training.privateTrainingPrice) {
-          try {
-            const selectedBranch = academyBranchOptions.find((branch) => branch.id === training.branchId) || null;
-            const programData = {
-              academyId: uid,
-              name: 'Private Training',
-              type: 'private_training',
-              fee: parseFloat(training.privateTrainingPrice),
-              description: `Private training sessions with ${training.coachName}`,
-              coachName: training.coachName,
-              coachBio: training.coachBio || null,
-              specializations: training.specializations ? training.specializations.split(',').map((s: string) => s.trim()) : [],
-              maxParticipants: 1,
-              duration: parseInt(training.sessionDuration) || 60,
-              availability: training.availability ? { general: training.availability } : null,
-              ...buildBookingBranchPayload(
-                selectedBranch || {
-                  id: training.branchId,
-                  name: training.branchName,
-                  address: training.branchAddress,
-                }
-              ),
-              isActive: true,
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-            };
-            await addDoc(collection(db, 'academy_programs'), programData);
-          } catch (programError) {
-            console.error('Error creating private training program:', programError);
-          }
-        }
-      }
-
-      await AsyncStorage.multiRemove([
-        ACADEMY_SIGNUP_DRAFT_KEY,
-        LOCATION_PICKER_RESULT_KEY,
-        EXTRA_LOCATION_PICKER_RESULT_KEY,
-      ]);
-      router.replace('/academy-feed');
+      void Promise.all([
+        Promise.all(
+          privateTrainings.map(async (training) => {
+            if (!training.coachName || !training.privateTrainingPrice) return;
+            try {
+              const selectedBranch = academyBranchOptions.find((branch) => branch.id === training.branchId) || null;
+              const programData = {
+                academyId: uid,
+                name: 'Private Training',
+                type: 'private_training',
+                fee: parseFloat(training.privateTrainingPrice),
+                description: `Private training sessions with ${training.coachName}`,
+                coachName: training.coachName,
+                coachBio: training.coachBio || null,
+                specializations: training.specializations ? training.specializations.split(',').map((s: string) => s.trim()) : [],
+                maxParticipants: 1,
+                duration: parseInt(training.sessionDuration) || 60,
+                availability: training.availability ? { general: training.availability } : null,
+                ...buildBookingBranchPayload(
+                  selectedBranch || {
+                    id: training.branchId,
+                    name: training.branchName,
+                    address: training.branchAddress,
+                  }
+                ),
+                isActive: true,
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+              };
+              await addDoc(collection(db, 'academy_programs'), programData);
+            } catch (programError) {
+              console.error('Error creating private training program:', programError);
+            }
+          })
+        ),
+        AsyncStorage.multiRemove([
+          ACADEMY_SIGNUP_DRAFT_KEY,
+          LOCATION_PICKER_RESULT_KEY,
+          EXTRA_LOCATION_PICKER_RESULT_KEY,
+        ]),
+      ]).catch((error) => {
+        console.warn('[SignupAcademy] Deferred setup failed:', error);
+      });
     } catch (err: any) {
       console.log('[Signup] Error:', err.message);
       let errorMsg = i18n.t('signupFailedMessage');
@@ -1048,6 +1176,8 @@ const SignupAcademy = () => {
           : (i18n.t('phoneAlreadyRegistered') || 'This phone number is already registered. Please use a different number or sign in.');
       } else if (err.code === 'forsa/phone-already-in-use') {
         errorMsg = i18n.t('phoneAlreadyRegistered') || 'This phone number is already registered. Please use a different number or sign in.';
+      } else if (err.code === 'forsa/email-already-in-use') {
+        errorMsg = i18n.t('emailAlreadyRegistered') || 'This email is already registered';
       } else if (err.code === 'auth/weak-password') {
         errorMsg = i18n.t('weakPassword') || 'Password is too weak';
       } else if (err.message) {
@@ -1102,6 +1232,12 @@ const SignupAcademy = () => {
               <Text style={styles.headerSubtitle}>{i18n.t('createYourAcademyAccount')}</Text>
             </View>
           </View>
+
+          <SignupStepBar
+            currentStep={2}
+            totalSteps={3}
+            stepLabels={['Account Type', 'Your Profile', 'Get Started']}
+          />
 
           <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
             <ScrollView
@@ -1204,7 +1340,7 @@ const SignupAcademy = () => {
                   <TextInput
                     style={styles.input}
                     value={academyName}
-                    onChangeText={t => { setAcademyName(t); if (missing.academyName) setMissing(m => ({ ...m, academyName: false })); }}
+                    onChangeText={t => { setAcademyName(t); if (missing.academyName) setMissing(m => ({ ...m, academyName: false })); validateField('academyName', t); }}
                     autoCapitalize="words"
                     placeholder={i18n.t('academy_name_placeholder')}
                     placeholderTextColor="#999"
@@ -1228,6 +1364,7 @@ const SignupAcademy = () => {
                       const nextPhone = formatEgyptPhoneFromLocalInput(t);
                       setPhone(nextPhone);
                       if (missing.phone) setMissing(m => ({ ...m, phone: false }));
+                      validateField('phone', nextPhone);
                     }}
                     keyboardType="phone-pad"
                     placeholder="01XXXXXXXXX"
@@ -1262,6 +1399,7 @@ const SignupAcademy = () => {
                           return newMissing;
                         });
                       }
+                      validateField('email', t);
                     }}
                     autoCapitalize="none"
                     keyboardType="email-address"
@@ -1282,7 +1420,7 @@ const SignupAcademy = () => {
                   <TextInput
                     style={styles.input}
                     value={password}
-                    onChangeText={t => { setPassword(t); if (missing.password) setMissing(m => ({ ...m, password: false })); }}
+                    onChangeText={t => { setPassword(t); if (missing.password) setMissing(m => ({ ...m, password: false })); validateField('password', t); }}
                     secureTextEntry
                     placeholder={i18n.t('password_placeholder')}
                     placeholderTextColor="#999"
@@ -1378,6 +1516,7 @@ const SignupAcademy = () => {
                               setCity(option.key);
                               setMainLocationSaved(false);
                               if (missing.city) setMissing(m => ({ ...m, city: false }));
+                              validateField('city', option.key);
                               setShowCityModal(false);
                             }}
                           >
@@ -1457,7 +1596,7 @@ const SignupAcademy = () => {
                   <TextInput
                     style={styles.input}
                     value={address}
-                    onChangeText={t => { setAddress(t); setMainLocationSaved(false); if (missing.address) setMissing(m => ({ ...m, address: false })); }}
+                    onChangeText={t => { setAddress(t); setMainLocationSaved(false); if (missing.address) setMissing(m => ({ ...m, address: false })); validateField('address', t); }}
                     autoCapitalize="words"
                     placeholder={i18n.t('address_placeholder')}
                     placeholderTextColor="#999"
@@ -1488,7 +1627,7 @@ const SignupAcademy = () => {
                   <TextInput
                     style={styles.input}
                     value={socialUrl}
-                    onChangeText={setSocialUrl}
+                    onChangeText={t => { setSocialUrl(t); if (missing.socialUrl) setMissing(m => ({ ...m, socialUrl: false })); validateField('socialUrl', t); }}
                     autoCapitalize="none"
                     placeholder="https://example.com or https://instagram.com/yourprofile"
                     placeholderTextColor="#999"

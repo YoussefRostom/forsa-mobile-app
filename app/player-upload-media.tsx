@@ -427,6 +427,11 @@ export default function PlayerUploadMediaScreen() {
       return;
     }
 
+    Alert.alert(
+      i18n.t('keepAppOpenTitle') || 'Keep App Open',
+      i18n.t('keepAppOpenUploadMessage') || 'Please keep the app open until the upload finishes.'
+    );
+
     setUploading(true);
     setUploadStatus((prev) => {
       const next = { ...prev };
@@ -678,14 +683,24 @@ export default function PlayerUploadMediaScreen() {
                   <TouchableOpacity
                     style={styles.emptyMedia}
                     onPress={handleAddMedia}
-                    activeOpacity={0.85}
+                    activeOpacity={0.75}
                     disabled={!canAddMore}
                   >
-                    <Ionicons name="images-outline" size={52} color="#999" />
-                    <Text style={styles.placeholder}>{i18n.t('noMedia') || 'No media uploaded yet.'}</Text>
-                    <Text style={styles.placeholderHint}>
-                      {i18n.t('tapToChooseMedia') || 'Tap here to choose one photo or video for this post.'}
+                    <View style={styles.emptyMediaIconWrap}>
+                      <Ionicons name="cloud-upload-outline" size={48} color="#111827" />
+                    </View>
+                    <Text style={styles.emptyMediaTitle}>
+                      {i18n.t('tapToChooseMediaTitle') || 'Tap to choose a photo or video'}
                     </Text>
+                    <Text style={styles.emptyMediaSubtitle}>
+                      {i18n.t('tapToChooseMedia') || 'Select from your camera roll to get started.'}
+                    </Text>
+                    <View style={styles.emptyMediaCta}>
+                      <Ionicons name="add-circle" size={20} color="#fff" />
+                      <Text style={styles.emptyMediaCtaText}>
+                        {i18n.t('chooseFile') || 'Choose File'}
+                      </Text>
+                    </View>
                   </TouchableOpacity>
                 ) : (
                   media.map((item, idx) => (
@@ -872,27 +887,37 @@ export default function PlayerUploadMediaScreen() {
               </View>
             )}
 
-            {media.length > 0 && (
-              <TouchableOpacity
-                style={[styles.submitBtn, uploading && styles.submitBtnDisabled]}
-                onPress={handleSubmit}
-                activeOpacity={0.8}
-                disabled={uploading}
-              >
-                {uploading ? (
-                  <View style={styles.uploadingContainer}>
-                    <FootballLoader size="small" color="#fff" style={{ marginRight: 8 }} />
-                    <Text style={styles.submitBtnText}>{i18n.t('uploading') || 'Uploading...'}</Text>
-                  </View>
-                ) : (
+            <TouchableOpacity
+              style={[
+                styles.submitBtn,
+                media.length === 0 && styles.submitBtnEmpty,
+                uploading && styles.submitBtnDisabled,
+              ]}
+              onPress={media.length === 0 ? handleAddMedia : handleSubmit}
+              activeOpacity={0.8}
+              disabled={uploading || (media.length === 0 && !canAddMore)}
+            >
+              {uploading ? (
+                <View style={styles.uploadingContainer}>
+                  <FootballLoader size="small" color="#fff" style={{ marginRight: 8 }} />
+                  <Text style={styles.submitBtnText}>{i18n.t('uploading') || 'Uploading...'}</Text>
+                </View>
+              ) : media.length === 0 ? (
+                <View style={styles.uploadingContainer}>
+                  <Ionicons name="cloud-upload-outline" size={22} color="#fff" style={{ marginRight: 8 }} />
+                  <Text style={styles.submitBtnText}>{i18n.t('chooseAndUpload') || 'Choose & Upload'}</Text>
+                </View>
+              ) : (
+                <View style={styles.uploadingContainer}>
+                  <Ionicons name="cloud-upload" size={22} color="#fff" style={{ marginRight: 8 }} />
                   <Text style={styles.submitBtnText}>
                     {failedCount > 0
                       ? `${i18n.t('retryFailedUploads') || 'Retry Failed Uploads'} (${failedCount})`
-                      : `${i18n.t('uploadMedia') || 'Upload Media'} (${media.length})`}
+                      : `${i18n.t('uploadMedia') || 'Upload'} (${media.length})`}
                   </Text>
-                )}
-              </TouchableOpacity>
-            )}
+                </View>
+              )}
+            </TouchableOpacity>
           </ScrollView>
         </View>
       </LinearGradient>
@@ -1146,6 +1171,49 @@ const styles = StyleSheet.create({
     width: '100%',
     alignItems: 'center',
     paddingVertical: 40,
+    borderWidth: 2,
+    borderColor: '#d1d5db',
+    borderStyle: 'dashed',
+    borderRadius: 20,
+    backgroundColor: '#f9fafb',
+  },
+  emptyMediaIconWrap: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: '#e5e7eb',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  emptyMediaTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#111827',
+    textAlign: 'center',
+    marginBottom: 6,
+  },
+  emptyMediaSubtitle: {
+    fontSize: 13,
+    color: '#6b7280',
+    textAlign: 'center',
+    lineHeight: 19,
+    paddingHorizontal: 20,
+    marginBottom: 20,
+  },
+  emptyMediaCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#111827',
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 999,
+  },
+  emptyMediaCtaText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '700',
   },
   placeholder: {
     fontSize: 16,
@@ -1436,10 +1504,15 @@ const styles = StyleSheet.create({
   submitBtnDisabled: {
     opacity: 0.6,
   },
+  submitBtnEmpty: {
+    backgroundColor: '#374151',
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.15)',
+    borderStyle: 'dashed',
+  },
   uploadingContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
   },
 });
-

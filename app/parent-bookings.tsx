@@ -3,9 +3,12 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as Clipboard from 'expo-clipboard';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Easing, FlatList, KeyboardAvoidingView, Platform, StyleSheet, Text, TouchableOpacity, View, Alert, RefreshControl } from 'react-native';
+import { Animated, Easing, FlatList, KeyboardAvoidingView, Platform, StyleSheet, Text, TouchableOpacity, View, Alert, RefreshControl, NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
 import HamburgerMenu from '../components/HamburgerMenu';
 import FootballLoader from '../components/FootballLoader';
+import FootballRefreshHeader from '../components/FootballRefreshHeader';
+import BookingCountdown from '../components/BookingCountdown';
+
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import { formatBookingBranch } from '../lib/bookingBranch';
 import { getBookingPublicId } from '../lib/bookingId';
@@ -22,6 +25,7 @@ import { getPendingBookings, subscribePendingBookings } from '../lib/pendingBook
 export default function ParentBookingsScreen() {
   const { openMenu } = useHamburgerMenu();
   const [filter, setFilter] = useState<'all' | 'clinic' | 'academy'>('all');
+  const [statusFilter, setStatusFilter] = useState<'active' | 'cancelled'>('active');
   const router = useRouter();
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const [bookings, setBookings] = useState<any[]>([]);
@@ -31,6 +35,9 @@ export default function ParentBookingsScreen() {
   const [openingAdminChat, setOpeningAdminChat] = useState(false);
   const [pendingVersion, setPendingVersion] = useState(0);
   const meterAnim = useRef(new Animated.Value(0)).current;
+  const controlsAnim = useRef(new Animated.Value(1)).current;
+  const lastScrollY = useRef(0);
+  const controlsHidden = useRef(false);
 
   const normalizeBooking = (booking: any) => {
     const bookingType = booking?.type || booking?.bookingType || (booking?.service ? 'clinic' : 'academy');
@@ -239,6 +246,32 @@ export default function ParentBookingsScreen() {
     void fetchBookings();
   }, [fetchBookings]);
 
+  const setControlsVisible = useCallback((visible: boolean) => {
+    if (controlsHidden.current === !visible) return;
+    controlsHidden.current = !visible;
+    Animated.timing(controlsAnim, {
+      toValue: visible ? 1 : 0,
+      duration: 180,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: false,
+    }).start();
+  }, [controlsAnim]);
+
+  const handleListScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const currentY = Math.max(0, event.nativeEvent.contentOffset.y);
+    const delta = currentY - lastScrollY.current;
+
+    if (currentY <= 8) {
+      setControlsVisible(true);
+    } else if (delta > 12) {
+      setControlsVisible(false);
+    } else if (delta < -8) {
+      setControlsVisible(true);
+    }
+
+    lastScrollY.current = currentY;
+  }, [setControlsVisible]);
+
   const handleAcceptTiming = async (bookingId: string) => {
     const success = await runBookingAction(bookingId, 'confirmed', i18n.t('timingAcceptedSuccess') || 'Timing accepted successfully', 'accept');
     if (!success) return;
@@ -297,9 +330,16 @@ export default function ParentBookingsScreen() {
     }
   };
 
-  const filteredBookings = filter === 'all'
+  const matchingBookings = filter === 'all'
     ? bookingsWithPending
     : bookingsWithPending.filter(b => (b.type || b.bookingType) === filter);
+  const cancelledFilteredBookings = matchingBookings.filter(
+    booking => String(booking.status || '').toLowerCase() === 'cancelled'
+  );
+  const filteredBookings = matchingBookings.filter(
+    booking => String(booking.status || '').toLowerCase() !== 'cancelled'
+  );
+  const visibleBookings = statusFilter === 'cancelled' ? cancelledFilteredBookings : filteredBookings;
 
   const getStatusMeta = (status: string) => getBookingStatusMeta(status, i18n);
 
@@ -323,13 +363,36 @@ export default function ParentBookingsScreen() {
 
           <HamburgerMenu />
 
+          <Animated.View
+            style={[
+              styles.controlsWrap,
+              {
+                opacity: controlsAnim,
+                maxHeight: controlsAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0, 140],
+                }),
+                transform: [{
+                  translateY: controlsAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [-18, 0],
+                  }),
+                }],
+              },
+            ]}
+          >
           {/* Filter Tabs */}
           <View style={styles.filterContainer}>
             <TouchableOpacity
               style={[styles.filterTab, filter === 'all' && styles.filterTabActive]}
               onPress={() => setFilter('all')}
             >
-              <Text style={[styles.filterText, filter === 'all' && styles.filterTextActive]}>
+              <Text
+                style={[styles.filterText, filter === 'all' && styles.filterTextActive]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.8}
+              >
                 {i18n.t('all') || 'All'}
               </Text>
             </TouchableOpacity>
@@ -338,7 +401,12 @@ export default function ParentBookingsScreen() {
               onPress={() => setFilter('clinic')}
             >
               <Ionicons name="medical" size={16} color={filter === 'clinic' ? '#fff' : '#999'} style={styles.filterIcon} />
-              <Text style={[styles.filterText, filter === 'clinic' && styles.filterTextActive]}>
+              <Text
+                style={[styles.filterText, filter === 'clinic' && styles.filterTextActive]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.8}
+              >
                 {i18n.t('clinics') || 'Clinics'}
               </Text>
             </TouchableOpacity>
@@ -347,11 +415,38 @@ export default function ParentBookingsScreen() {
               onPress={() => setFilter('academy')}
             >
               <Ionicons name="school" size={16} color={filter === 'academy' ? '#fff' : '#999'} style={styles.filterIcon} />
-              <Text style={[styles.filterText, filter === 'academy' && styles.filterTextActive]}>
+              <Text
+                style={[styles.filterText, filter === 'academy' && styles.filterTextActive]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.72}
+              >
                 {i18n.t('academies') || 'Academies'}
               </Text>
             </TouchableOpacity>
           </View>
+
+          <View style={styles.sectionTabs}>
+            <TouchableOpacity
+              style={[styles.sectionTab, statusFilter === 'active' && styles.sectionTabActive]}
+              onPress={() => setStatusFilter('active')}
+              activeOpacity={0.85}
+            >
+              <Text style={[styles.sectionTabText, statusFilter === 'active' && styles.sectionTabTextActive]}>
+                {i18n.t('activeBookings') || 'Active Bookings'} ({filteredBookings.length})
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.sectionTab, statusFilter === 'cancelled' && styles.sectionTabActive]}
+              onPress={() => setStatusFilter('cancelled')}
+              activeOpacity={0.85}
+            >
+              <Text style={[styles.sectionTabText, statusFilter === 'cancelled' && styles.sectionTabTextActive]}>
+                {i18n.t('cancelledBookings') || 'Cancelled Bookings'} ({cancelledFilteredBookings.length})
+              </Text>
+            </TouchableOpacity>
+          </View>
+          </Animated.View>
 
           {loading ? (
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
@@ -359,13 +454,16 @@ export default function ParentBookingsScreen() {
             </View>
           ) : (
             <FlatList
-              data={filteredBookings}
+              data={visibleBookings}
               keyExtractor={item => item.id}
               contentContainerStyle={styles.listContent}
               showsVerticalScrollIndicator={false}
+              onScroll={handleListScroll}
+              scrollEventThrottle={16}
               refreshControl={
-                <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#fff" />
+                <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="transparent" colors={['transparent']} />
               }
+              ListHeaderComponent={<FootballRefreshHeader refreshing={refreshing} />}
               renderItem={({ item }) => (
                 <View style={styles.bookingCard}>
                   {item.__pendingBooking ? (
@@ -535,6 +633,10 @@ export default function ParentBookingsScreen() {
                     )}
                   </View>
 
+                  {String(item.status || '').toLowerCase() === 'confirmed' && (
+                    <BookingCountdown date={item.date} time={item.time} />
+                  )}
+
                   <View style={styles.cardFooter}>
                     <Text style={styles.priceText}>{item.price} EGP</Text>
                       {!item.__pendingBooking && !['cancelled', 'completed', 'no_show', 'refunded', 'failed_payment'].includes(String(item.status || '').toLowerCase()) && (
@@ -638,10 +740,21 @@ export default function ParentBookingsScreen() {
                 </View>
               )}
               ListEmptyComponent={
-                <View style={styles.emptyState}>
-                  <Ionicons name="calendar-outline" size={64} color="#666" />
-                  <Text style={styles.emptyText}>{i18n.t('noBookingsFound') || 'No bookings found'}</Text>
-                </View>
+                visibleBookings.length === 0 ? (
+                  <View style={styles.emptyState}>
+                    <Ionicons name="calendar-outline" size={64} color="#666" />
+                    <Text style={styles.emptyText}>
+                      {statusFilter === 'cancelled'
+                        ? (i18n.t('noCancelledBookings') || 'No cancelled bookings yet')
+                        : (i18n.t('noBookingsFound') || 'No bookings found')}
+                    </Text>
+                    <Text style={styles.emptySubtext}>
+                      {statusFilter === 'cancelled'
+                        ? (i18n.t('cancelledBookingsWillAppear') || 'Cancelled bookings will appear here')
+                        : (i18n.t('bookingsWillAppear') || 'Your bookings will appear here')}
+                    </Text>
+                  </View>
+                ) : null
               }
             />
           )}
@@ -705,9 +818,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     minHeight: 46,
     paddingVertical: 14,
-    paddingHorizontal: 16,
+    paddingHorizontal: 10,
     borderRadius: 12,
     backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    minWidth: 0,
   },
   filterTabActive: {
     backgroundColor: '#000',
@@ -716,12 +830,46 @@ const styles = StyleSheet.create({
     marginRight: 6,
   },
   filterText: {
-    fontSize: 14,
+    flexShrink: 1,
+    fontSize: 13,
     fontWeight: '600',
     color: '#999',
+    textAlign: 'center',
   },
   filterTextActive: {
     color: '#fff',
+  },
+  sectionTabs: {
+    flexDirection: 'row',
+    paddingHorizontal: 20,
+    marginBottom: 16,
+    gap: 10,
+  },
+  sectionTab: {
+    flex: 1,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+  },
+  sectionTabActive: {
+    backgroundColor: 'rgba(37,99,235,0.28)',
+    borderColor: 'rgba(96,165,250,0.45)',
+  },
+  sectionTabText: {
+    color: 'rgba(255,255,255,0.72)',
+    fontSize: 13,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  sectionTabTextActive: {
+    color: '#fff',
+  },
+  controlsWrap: {
+    overflow: 'hidden',
   },
   listContent: {
     paddingHorizontal: 20,
@@ -737,6 +885,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.15,
     shadowRadius: 12,
     elevation: 5,
+    overflow: 'hidden',
   },
   cardHeader: {
     flexDirection: 'row',
@@ -949,5 +1098,10 @@ const styles = StyleSheet.create({
     color: '#fff',
     marginTop: 16,
   },
+  emptySubtext: {
+    fontSize: 14,
+    color: 'rgba(255,255,255,0.65)',
+    marginTop: 8,
+    textAlign: 'center',
+  },
 });
-

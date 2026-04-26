@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import {
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   View,
   Text,
   TouchableOpacity,
@@ -21,9 +23,22 @@ interface ReportModalProps {
   targetId: string;
   snapshot?: ReportSnapshot;
   reportedUserName?: string;
+  targetLabel?: string;
 }
 
-function getReasonLabel(value: ReportReason): string {
+function getReasonLabel(value: ReportReason, targetType: ReportTargetType): string {
+  if (targetType === 'academy' || targetType === 'clinic') {
+    const providerKey = {
+      spam: 'reportReasonProviderMisleading',
+      harassment: 'reportReasonProviderUnprofessional',
+      nudity: 'reportReasonProviderUnsafe',
+      violence: 'reportReasonProviderAbuse',
+      fake: 'reportReasonProviderFraud',
+      other: 'reportReasonOther',
+    }[value];
+    return i18n.t(providerKey) || value;
+  }
+
   const key = {
     spam: 'reportReasonSpam',
     harassment: 'reportReasonHarassment',
@@ -37,6 +52,21 @@ function getReasonLabel(value: ReportReason): string {
 
 const REPORT_REASONS: ReportReason[] = ['spam', 'harassment', 'nudity', 'violence', 'fake', 'other'];
 
+function getReportTitle(targetType: ReportTargetType): string {
+  switch (targetType) {
+    case 'post':
+      return i18n.t('reportTitlePost') || 'Report Post';
+    case 'user':
+      return i18n.t('reportTitleUser') || 'Report User';
+    case 'academy':
+      return i18n.t('reportTitleAcademy') || 'Report Academy';
+    case 'clinic':
+      return i18n.t('reportTitleClinic') || 'Report Clinic';
+    default:
+      return i18n.t('report') || 'Report';
+  }
+}
+
 export default function ReportModal({
   visible,
   onClose,
@@ -44,6 +74,7 @@ export default function ReportModal({
   targetId,
   snapshot,
   reportedUserName,
+  targetLabel,
 }: ReportModalProps) {
   const [selectedReason, setSelectedReason] = useState<ReportReason | null>(null);
   const [details, setDetails] = useState('');
@@ -88,20 +119,32 @@ export default function ReportModal({
       animationType="slide"
       onRequestClose={handleClose}
     >
-      <View style={styles.overlay}>
+      <KeyboardAvoidingView
+        style={styles.overlay}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 24 : 0}
+      >
         <View style={styles.modalContainer}>
           <View style={styles.header}>
             <Text style={styles.title}>
-              {targetType === 'post' ? i18n.t('reportTitlePost') : i18n.t('reportTitleUser')}
+              {getReportTitle(targetType)}
             </Text>
             <TouchableOpacity onPress={handleClose} style={styles.closeButton}>
               <Ionicons name="close" size={24} color="#666" />
             </TouchableOpacity>
           </View>
 
-          <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+          <ScrollView
+            style={styles.content}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={styles.contentContainer}
+          >
             {reportedUserName && (
               <Text style={styles.subtitle}>{i18n.t('reportingUser')} {reportedUserName}</Text>
+            )}
+            {!reportedUserName && !!targetLabel && (
+              <Text style={styles.subtitle}>{i18n.t('reportingEntity') || 'Reporting:'} {targetLabel}</Text>
             )}
 
             <Text style={styles.label}>{i18n.t('reasonForReporting')}</Text>
@@ -125,12 +168,14 @@ export default function ReportModal({
                       <View style={styles.radioButtonInner} />
                     )}
                   </View>
-                  <Text style={styles.reasonLabel}>{getReasonLabel(reasonValue)}</Text>
+                  <Text style={styles.reasonLabel}>{getReasonLabel(reasonValue, targetType)}</Text>
                 </View>
               </TouchableOpacity>
             ))}
 
-            <Text style={styles.label}>{i18n.t('additionalDetailsOptional')}</Text>
+            <Text style={styles.label}>
+              {i18n.t('additionalDetailsOptional') || 'Additional details (optional)'}
+            </Text>
             <TextInput
               style={styles.textInput}
               placeholder={i18n.t('reportDetailsPlaceholder')}
@@ -163,7 +208,7 @@ export default function ReportModal({
             </TouchableOpacity>
           </View>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -198,8 +243,11 @@ const styles = StyleSheet.create({
     padding: 4,
   },
   content: {
-    padding: 20,
     maxHeight: 400,
+  },
+  contentContainer: {
+    padding: 20,
+    paddingBottom: 28,
   },
   subtitle: {
     fontSize: 14,

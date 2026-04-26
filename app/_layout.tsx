@@ -1,11 +1,13 @@
-import { Slot } from 'expo-router';
+import { Slot, useRouter, useSegments } from 'expo-router';
 import React, { useEffect } from 'react';
 import { Text, TouchableOpacity, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ToastProvider } from 'react-native-toast-notifications';
 import { HamburgerMenuProvider } from '../components/HamburgerMenuContext';
+import OnboardingOverlay from '../components/OnboardingOverlay';
 import { AuthProvider, useAuth } from '../context/AuthContext';
+import { OnboardingProvider } from '../context/OnboardingContext';
 import { initCrashReporting, Sentry, setCrashReportingUser } from '../services/CrashReportingService';
 import { configurePushNotificationListeners, syncCurrentUserPushToken } from '../services/PushNotificationService';
 import i18n from '../locales/i18n';
@@ -36,6 +38,32 @@ function PushNotificationBootstrap() {
     if (!user?.uid) return;
     void syncCurrentUserPushToken();
   }, [user?.uid]);
+
+  return null;
+}
+
+function SuspensionGuard() {
+  const { user, isLoading } = useAuth();
+  const router = useRouter();
+  const segments = useSegments();
+
+  useEffect(() => {
+    if (isLoading) return;
+
+    const firstSegment = segments[0] || '';
+    const onSuspendedScreen = firstSegment === 'account-suspended';
+
+    if (user?.isSuspended) {
+      if (!onSuspendedScreen) {
+        router.replace('/account-suspended');
+      }
+      return;
+    }
+
+    if (!user?.isSuspended && onSuspendedScreen) {
+      router.replace('/splash');
+    }
+  }, [isLoading, router, segments, user?.isSuspended]);
 
   return null;
 }
@@ -74,11 +102,15 @@ export default function Layout() {
         <AuthProvider>
           <Sentry.ErrorBoundary fallback={({ resetError }: { resetError: () => void }) => <AppCrashFallback resetError={resetError} />}>
             <PushNotificationBootstrap />
-            <HamburgerMenuProvider>
-              <ToastProvider>
-                <Slot />
-              </ToastProvider>
-            </HamburgerMenuProvider>
+            <SuspensionGuard />
+            <OnboardingProvider>
+              <HamburgerMenuProvider>
+                <ToastProvider>
+                  <Slot />
+                  <OnboardingOverlay />
+                </ToastProvider>
+              </HamburgerMenuProvider>
+            </OnboardingProvider>
           </Sentry.ErrorBoundary>
         </AuthProvider>
       </SafeAreaProvider>

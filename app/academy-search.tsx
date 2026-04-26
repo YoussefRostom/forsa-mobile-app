@@ -8,9 +8,12 @@ import { Alert, FlatList, KeyboardAvoidingView, Modal, Platform, ScrollView, Sty
 import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import i18n from '../locales/i18n';
-import { db } from '../lib/firebase';
-import { collection, query, getDocs, where } from 'firebase/firestore';
+import { auth, db } from '../lib/firebase';
+import { collection, query, getDocs, where, onSnapshot } from 'firebase/firestore';
 import FootballLoader from '../components/FootballLoader';
+import SuspendedBadge from '../components/SuspendedBadge';
+import { isSuspendedEntity } from '../lib/suspension';
+import { toggleFollow } from '../services/FollowService';
 
 const cities = Object.entries(i18n.t('cities', { returnObjects: true }) as Record<string, string>).map(([key, label]) => ({ key, label }));
 const cityOptions = cities.filter(({ key }) => !['giza', 'newCairo'].includes(key));
@@ -195,6 +198,8 @@ interface Academy {
   displayFee: number;
   role: string;
   [key: string]: any;
+  isSuspended?: boolean;
+  status?: string;
 }
 
 export default function AcademySearchScreen() {
@@ -215,8 +220,10 @@ export default function AcademySearchScreen() {
   const [distanceMap, setDistanceMap] = useState<Record<string, number>>({});
   const [, setLocationLoading] = useState(false);
   const [academies, setAcademies] = useState<Academy[]>([]);
+  const [followStates, setFollowStates] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
   const router = useRouter();
+  const currentUid = auth.currentUser?.uid || '';
   const availableDistricts = city ? districtsByCity[city] || [] : [];
   const isDistrictEnabled = Boolean(city && availableDistricts.length > 0);
   const selectedDistrictLabel = selectedDistricts.length === 0
@@ -284,6 +291,25 @@ export default function AcademySearchScreen() {
   }, []);
 
   useEffect(() => {
+    if (!currentUid) {
+      setFollowStates({});
+      return;
+    }
+
+    return onSnapshot(
+      collection(db, `users/${currentUid}/following`),
+      (snap) => {
+        const next: Record<string, boolean> = {};
+        snap.docs.forEach((docSnap) => {
+          next[docSnap.id] = true;
+        });
+        setFollowStates(next);
+      },
+      () => setFollowStates({})
+    );
+  }, [currentUid]);
+
+  useEffect(() => {
     if (maxAvailablePrice <= 0) {
       setPrice(null);
       return;
@@ -304,7 +330,11 @@ export default function AcademySearchScreen() {
       try {
         const academiesRef = collection(db, 'academies');
         const q = query(academiesRef);
-        const querySnapshot = await getDocs(q);
+        const [querySnapshot, usersSnapshot] = await Promise.all([
+          getDocs(q),
+          getDocs(collection(db, 'users')),
+        ]);
+        const userMap = new Map(usersSnapshot.docs.map((userDoc) => [userDoc.id, userDoc.data()]));
 
         const programsRef = collection(db, 'academy_programs');
         const pQ = query(programsRef, where('type', '==', 'private_training'));
@@ -319,6 +349,7 @@ export default function AcademySearchScreen() {
 
         querySnapshot.forEach((doc) => {
           const data = doc.data();
+          const userData = userMap.get(doc.id);
 
           academyList.push({
             ...data,
@@ -333,6 +364,8 @@ export default function AcademySearchScreen() {
             displayFee: getLowestNumericFee(data.fees),
             role: data.role || 'academy',
             privateTraining: privateProgramsMap[doc.id] || null,
+            isSuspended: isSuspendedEntity({ ...data, ...userData }),
+            status: userData?.status || data.status || '',
           });
         });
       } catch (error) {
@@ -369,6 +402,28 @@ export default function AcademySearchScreen() {
       textBlob.includes('private trainer') ||
       textBlob.includes('private training')
     );
+  };
+
+  const handleToggleFollow = async (academy: Academy) => {
+    setFollowStates((prev) => ({ ...prev, [academy.id]: !prev[academy.id] }));
+    try {
+      await toggleFollow(academy.id, 'academy', academy.academyName || academy.name, academy.profilePhoto || academy.photo || '');
+    } catch (error) {
+      setFollowStates((prev) => ({ ...prev, [academy.id]: !prev[academy.id] }));
+      console.error('[AcademySearch] Follow toggle failed:', error);
+    }
+  };
+
+  const handleAcademyPress = (academy: Academy) => {
+    if (academy.isSuspended) {
+      Alert.alert(
+        i18n.t('suspendedBadge') || 'Suspended',
+        i18n.t('suspendedProviderUnavailable') || 'This provider is suspended and unavailable right now.'
+      );
+      return;
+    }
+
+    router.push({ pathname: '/academy-details', params: { academy: JSON.stringify(academy) } });
   };
 
   const toggleDistrictSelection = (districtKey: string) => {
@@ -521,7 +576,6 @@ export default function AcademySearchScreen() {
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
-          {/* Header */}
           <View style={styles.header}>
             <TouchableOpacity style={styles.menuButton} onPress={openMenu}>
               <Ionicons name="menu" size={24} color="#fff" />
@@ -823,11 +877,12 @@ export default function AcademySearchScreen() {
                 const displayAddress = [displayDistrict, displayCityLabel, displayLocation?.address || item.address]
                   .filter(Boolean)
                   .join(', ');
+                const isFollowing = !!followStates[item.id];
 
                 return (
                 <TouchableOpacity
-                  style={styles.card}
-                  onPress={() => router.push({ pathname: '/academy-details', params: { academy: JSON.stringify(item) } })}
+                  style={[styles.card, item.isSuspended && styles.cardSuspended]}
+                  onPress={() => handleAcademyPress(item)}
                   activeOpacity={0.8}
                 >
                   <View style={styles.cardHeader}>
@@ -841,7 +896,24 @@ export default function AcademySearchScreen() {
                         <Text style={styles.cardCity} numberOfLines={1}>{displayCityLabel}</Text>
                       </View>
                     </View>
+                    <TouchableOpacity
+                      style={[styles.followPill, isFollowing && styles.followPillActive]}
+                      onPress={(event: any) => {
+                        event.stopPropagation?.();
+                        void handleToggleFollow(item);
+                      }}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={[styles.followPillText, isFollowing && styles.followPillTextActive]}>
+                        {isFollowing ? (i18n.t('following') || 'Following') : (i18n.t('follow') || 'Follow')}
+                      </Text>
+                    </TouchableOpacity>
                   </View>
+                  {item.isSuspended && (
+                    <View style={styles.cardSuspendedBadgeRow}>
+                      <SuspendedBadge tone="light" />
+                    </View>
+                  )}
                   <Text style={styles.cardDesc} numberOfLines={3}>{item.description}</Text>
                   {Number.isFinite(distanceMap[item.id]) && (
                     <Text style={styles.cardDistanceText}>
@@ -1209,6 +1281,14 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 5,
   },
+  cardSuspended: {
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    opacity: 0.9,
+  },
+  cardSuspendedBadgeRow: {
+    marginBottom: 10,
+  },
   cardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1233,6 +1313,29 @@ const styles = StyleSheet.create({
     color: '#000',
     marginBottom: 4,
     flexShrink: 1,
+  },
+  followPill: {
+    minWidth: 78,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#111827',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    marginLeft: 8,
+  },
+  followPillActive: {
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#10b981',
+  },
+  followPillText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  followPillTextActive: {
+    color: '#065f46',
   },
   cardLocation: {
     flexDirection: 'row',

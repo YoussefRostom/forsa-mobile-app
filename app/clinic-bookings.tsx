@@ -16,6 +16,9 @@ import { startConversationWithUser } from '../services/BookingMessagingService';
 import { findAdminUserId } from '../services/MessagingService';
 import { getMonetizationSettings } from '../services/MonetizationService';
 import FootballLoader from '../components/FootballLoader';
+import FootballRefreshHeader from '../components/FootballRefreshHeader';
+import BookingCountdown from '../components/BookingCountdown';
+
 
 type BookingItem = {
   id: string;
@@ -168,7 +171,13 @@ export default function ClinicBookingsScreen() {
     void fetchBookings();
   }, [fetchBookings]);
 
-  const filteredBookings = bookings.filter(b => matchesBookingStatusFilter(b.status, filter));
+  const allFilteredBookings = bookings.filter(b => matchesBookingStatusFilter(b.status, filter));
+  const cancelledFilteredBookings = filter === 'all'
+    ? bookings.filter(booking => String(booking.status || '').toLowerCase() === 'cancelled')
+    : [];
+  const filteredBookings = filter === 'all'
+    ? allFilteredBookings.filter(booking => String(booking.status || '').toLowerCase() !== 'cancelled')
+    : allFilteredBookings;
 
   const getStatusMeta = (status: string) => getBookingStatusMeta(status, i18n);
 
@@ -284,9 +293,10 @@ export default function ClinicBookingsScreen() {
               contentContainerStyle={styles.scrollContent}
               showsVerticalScrollIndicator={false}
               refreshControl={
-                <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#fff" />
+                <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="transparent" colors={['transparent']} />
               }
             >
+              <FootballRefreshHeader refreshing={refreshing} />
               <View style={styles.commissionBanner}>
                 <Text style={styles.commissionBannerTitle}>{i18n.t('commissionSettings') || 'Commission Settings'}</Text>
                 <Text style={styles.commissionBannerText}>
@@ -294,15 +304,16 @@ export default function ClinicBookingsScreen() {
                 </Text>
               </View>
 
-              {filteredBookings.length === 0 ? (
+              {filteredBookings.length === 0 && cancelledFilteredBookings.length === 0 ? (
                 <View style={styles.emptyContainer}>
                   <Ionicons name="calendar-outline" size={64} color="rgba(255, 255, 255, 0.3)" />
                   <Text style={styles.emptyText}>{i18n.t('noBookings') || 'No bookings found'}</Text>
                   <Text style={styles.emptySubtext}>{i18n.t('appointmentsWillAppear') || 'Patient appointments will appear here'}</Text>
                 </View>
               ) : (
-                filteredBookings.map((booking) => (
-                  <View key={booking.id} style={styles.bookingCard}>
+                <>
+                  {filteredBookings.map((booking) => (
+                    <View key={booking.id} style={styles.bookingCard}>
                     <View style={styles.bookingHeader}>
                       <View style={styles.patientInfoContainer}>
                         <Ionicons name="person-circle" size={32} color="#fff" />
@@ -356,6 +367,10 @@ export default function ClinicBookingsScreen() {
                       <Text style={styles.priceLabel}>{i18n.t('fee') || 'Fee'}</Text>
                       <Text style={styles.priceValue}>{booking.price != null ? `${booking.price} EGP` : '—'}</Text>
                     </View>
+
+                    {String(booking.status || '').toLowerCase() === 'confirmed' && (
+                      <BookingCountdown date={booking.date} time={booking.time} />
+                    )}
                     
                     <TouchableOpacity
                       style={[styles.chatButton, { opacity: openingAdminChat ? 0.6 : 1 }]}
@@ -370,8 +385,49 @@ export default function ClinicBookingsScreen() {
                       )}
                       <Text style={styles.chatButtonText}>{openingAdminChat ? (i18n.t('loading') || 'Loading...') : (i18n.t('chatToAdmin') || 'Chat to Admin')}</Text>
                     </TouchableOpacity>
-                  </View>
-                ))
+                    </View>
+                  ))}
+                  {cancelledFilteredBookings.length > 0 ? (
+                    <>
+                      <Text style={styles.sectionTitle}>{i18n.t('cancelledBookings') || 'Cancelled Bookings'}</Text>
+                      {cancelledFilteredBookings.map((booking) => (
+                        <View key={`cancelled-${booking.id}`} style={styles.bookingCard}>
+                          <View style={styles.bookingHeader}>
+                            <View style={styles.patientInfoContainer}>
+                              <Ionicons name="person-circle" size={32} color="#fff" />
+                              <View style={styles.patientDetails}>
+                                <Text style={styles.patientName}>{displayName(booking)}</Text>
+                              </View>
+                            </View>
+                            <View style={[styles.statusBadge, { backgroundColor: getStatusMeta(booking.status).color }]}>
+                              <Text style={styles.statusText}>{getStatusMeta(booking.status).label}</Text>
+                            </View>
+                          </View>
+                          <TouchableOpacity style={styles.bookingIdBadge} onPress={() => void handleCopyBookingId(booking)} activeOpacity={0.8}>
+                            <Text style={styles.bookingIdText}>{i18n.t('bookingId') || 'Booking ID'}: {getBookingPublicId(booking)}</Text>
+                          </TouchableOpacity>
+                          <View style={styles.bookingFooter}>
+                            <Text style={styles.priceLabel}>{i18n.t('fee') || 'Fee'}</Text>
+                            <Text style={styles.priceValue}>{booking.price != null ? `${booking.price} EGP` : '—'}</Text>
+                          </View>
+                          <TouchableOpacity
+                            style={[styles.chatButton, { opacity: openingAdminChat ? 0.6 : 1 }]}
+                            onPress={openAdminChat}
+                            disabled={openingAdminChat}
+                            activeOpacity={0.8}
+                          >
+                            {openingAdminChat ? (
+                              <FootballLoader size="small" color="#000" />
+                            ) : (
+                              <Ionicons name="chatbubbles" size={18} color="#000" />
+                            )}
+                            <Text style={styles.chatButtonText}>{openingAdminChat ? (i18n.t('loading') || 'Loading...') : (i18n.t('chatToAdmin') || 'Chat to Admin')}</Text>
+                          </TouchableOpacity>
+                        </View>
+                      ))}
+                    </>
+                  ) : null}
+                </>
               )}
             </ScrollView>
           )}
@@ -465,6 +521,13 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   scrollContent: { paddingHorizontal: 24, paddingBottom: 40 },
+  sectionTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#fff',
+    marginTop: 8,
+    marginBottom: 14,
+  },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingVertical: 40 },
   emptyContainer: {
     alignItems: 'center',
@@ -485,12 +548,13 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   bookingCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
     borderRadius: 18,
     padding: 22,
     marginBottom: 18,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderColor: 'rgba(255, 255, 255, 0.18)',
+    overflow: 'hidden',
   },
   bookingHeader: {
     flexDirection: 'row',

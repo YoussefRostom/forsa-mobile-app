@@ -235,11 +235,6 @@ export default function AdminUserChat() {
     Keyboard.dismiss();
     try {
       await sendMessage(conversationIdState, message);
-      if (conversationIdState) {
-        markMessagesAsRead(conversationIdState).catch((error) => {
-          console.warn('Failed to mark admin chat messages as read after send:', error);
-        });
-      }
     } catch (err) {
       console.error('Error sending admin message:', err);
       setRetryDraft(message);
@@ -363,7 +358,7 @@ export default function AdminUserChat() {
                   </TouchableOpacity>
                   {!!timeLabel && (
                     <Text style={isSent ? S.metaSent : S.metaReceived}>
-                      {timeLabel}{isSent ? (message.isRead ? ' • Seen' : ' • Sent') : ''}
+                      {timeLabel}{isSent ? (message.isRead ? ' - Seen' : ' - Sent') : ''}
                     </Text>
                   )}
                 </View>

@@ -69,6 +69,17 @@ export async function suspendUser(userId: string, adminId: string, reason: strin
       throw new Error('User not found');
     }
 
+    const userData = userSnap.data() as Record<string, any>;
+    const role = String(userData?.role || 'user').toLowerCase();
+    const roleLabel =
+      role === 'player'
+        ? 'player'
+        : role === 'parent'
+          ? 'parent'
+          : role === 'agent'
+            ? 'agent'
+            : 'account';
+
     await updateDoc(userRef, {
       isSuspended: true,
       suspendedAt: serverTimestamp(),
@@ -89,9 +100,9 @@ export async function suspendUser(userId: string, adminId: string, reason: strin
     createNotification({
       userId,
       title: 'Account suspended',
-      body: reason || 'Your account has been suspended. Please contact support.',
+      body: reason || `Your ${roleLabel} account has been suspended. Please contact the admin.`,
       type: 'system',
-      data: { action: 'suspended' },
+      data: { action: 'suspended', role },
     }).catch((e) => console.warn('[ModerationService] Suspend notification failed:', e));
   } catch (error: any) {
     console.error('Error suspending user:', error);
@@ -193,4 +204,3 @@ export async function isAdmin(): Promise<boolean> {
     return false;
   }
 }
-

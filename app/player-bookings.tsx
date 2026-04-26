@@ -3,8 +3,11 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as Clipboard from 'expo-clipboard';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Easing, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View, Alert, RefreshControl } from 'react-native';
+import { Animated, Easing, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View, Alert, RefreshControl, NativeSyntheticEvent, NativeScrollEvent } from 'react-native';
 import FootballLoader from '../components/FootballLoader';
+import FootballRefreshHeader from '../components/FootballRefreshHeader';
+import BookingCountdown from '../components/BookingCountdown';
+
 import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import { formatBookingBranch } from '../lib/bookingBranch';
@@ -22,6 +25,7 @@ import { getPendingBookings, subscribePendingBookings } from '../lib/pendingBook
 export default function PlayerBookingsScreen() {
   const { openMenu } = useHamburgerMenu();
   const [filter, setFilter] = useState<'all' | 'clinic' | 'academy'>('all');
+  const [statusFilter, setStatusFilter] = useState<'active' | 'cancelled'>('active');
   const router = useRouter();
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const [bookings, setBookings] = useState<any[]>([]);
@@ -31,6 +35,9 @@ export default function PlayerBookingsScreen() {
   const [openingAdminChat, setOpeningAdminChat] = useState(false);
   const [pendingVersion, setPendingVersion] = useState(0);
   const meterAnim = useRef(new Animated.Value(0)).current;
+  const controlsAnim = useRef(new Animated.Value(1)).current;
+  const lastScrollY = useRef(0);
+  const controlsHidden = useRef(false);
 
   const normalizeBooking = (booking: any) => {
     const bookingType = booking?.type || booking?.bookingType || (booking?.service ? 'clinic' : 'academy');
@@ -177,6 +184,32 @@ export default function PlayerBookingsScreen() {
     void fetchBookings();
   }, [fetchBookings]);
 
+  const setControlsVisible = useCallback((visible: boolean) => {
+    if (controlsHidden.current === !visible) return;
+    controlsHidden.current = !visible;
+    Animated.timing(controlsAnim, {
+      toValue: visible ? 1 : 0,
+      duration: 180,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: false,
+    }).start();
+  }, [controlsAnim]);
+
+  const handleListScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const currentY = Math.max(0, event.nativeEvent.contentOffset.y);
+    const delta = currentY - lastScrollY.current;
+
+    if (currentY <= 8) {
+      setControlsVisible(true);
+    } else if (delta > 12) {
+      setControlsVisible(false);
+    } else if (delta < -8) {
+      setControlsVisible(true);
+    }
+
+    lastScrollY.current = currentY;
+  }, [setControlsVisible]);
+
   const runBookingAction = async (
     bookingId: string,
     nextStatus: 'cancelled' | 'confirmed',
@@ -297,9 +330,16 @@ export default function PlayerBookingsScreen() {
     }
   };
 
-  const filteredBookings = filter === 'all' 
-    ? bookingsWithPending 
+  const matchingBookings = filter === 'all'
+    ? bookingsWithPending
     : bookingsWithPending.filter(b => (b.type || b.bookingType) === filter);
+  const cancelledFilteredBookings = matchingBookings.filter(
+    booking => String(booking.status || '').toLowerCase() === 'cancelled'
+  );
+  const filteredBookings = matchingBookings.filter(
+    booking => String(booking.status || '').toLowerCase() !== 'cancelled'
+  );
+  const visibleBookings = statusFilter === 'cancelled' ? cancelledFilteredBookings : filteredBookings;
 
   const getStatusMeta = (status: string) => getBookingStatusMeta(status, i18n);
 
@@ -322,13 +362,36 @@ export default function PlayerBookingsScreen() {
             </View>
           </View>
 
+          <Animated.View
+            style={[
+              styles.controlsWrap,
+              {
+                opacity: controlsAnim,
+                maxHeight: controlsAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0, 140],
+                }),
+                transform: [{
+                  translateY: controlsAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [-18, 0],
+                  }),
+                }],
+              },
+            ]}
+          >
           {/* Filter Buttons */}
           <View style={styles.filterContainer}>
             <TouchableOpacity
               style={[styles.filterButton, filter === 'all' && styles.filterButtonActive]}
               onPress={() => setFilter('all')}
             >
-              <Text style={[styles.filterButtonText, filter === 'all' && styles.filterButtonTextActive]}>
+              <Text
+                style={[styles.filterButtonText, filter === 'all' && styles.filterButtonTextActive]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.8}
+              >
                 {i18n.t('all') || 'All'}
               </Text>
             </TouchableOpacity>
@@ -337,7 +400,12 @@ export default function PlayerBookingsScreen() {
               onPress={() => setFilter('clinic')}
             >
               <Ionicons name="medical" size={18} color={filter === 'clinic' ? '#fff' : '#666'} />
-              <Text style={[styles.filterButtonText, filter === 'clinic' && styles.filterButtonTextActive]}>
+              <Text
+                style={[styles.filterButtonText, filter === 'clinic' && styles.filterButtonTextActive]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.8}
+              >
                 {i18n.t('clinics') || 'Clinics'}
               </Text>
             </TouchableOpacity>
@@ -346,34 +414,73 @@ export default function PlayerBookingsScreen() {
               onPress={() => setFilter('academy')}
             >
               <Ionicons name="school" size={18} color={filter === 'academy' ? '#fff' : '#666'} />
-              <Text style={[styles.filterButtonText, filter === 'academy' && styles.filterButtonTextActive]}>
+              <Text
+                style={[styles.filterButtonText, filter === 'academy' && styles.filterButtonTextActive]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.72}
+              >
                 {i18n.t('academies') || 'Academies'}
               </Text>
             </TouchableOpacity>
           </View>
 
+          <View style={styles.sectionTabs}>
+            <TouchableOpacity
+              style={[styles.sectionTab, statusFilter === 'active' && styles.sectionTabActive]}
+              onPress={() => setStatusFilter('active')}
+              activeOpacity={0.85}
+            >
+              <Text style={[styles.sectionTabText, statusFilter === 'active' && styles.sectionTabTextActive]}>
+                {i18n.t('activeBookings') || 'Active Bookings'} ({filteredBookings.length})
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.sectionTab, statusFilter === 'cancelled' && styles.sectionTabActive]}
+              onPress={() => setStatusFilter('cancelled')}
+              activeOpacity={0.85}
+            >
+              <Text style={[styles.sectionTabText, statusFilter === 'cancelled' && styles.sectionTabTextActive]}>
+                {i18n.t('cancelledBookings') || 'Cancelled Bookings'} ({cancelledFilteredBookings.length})
+              </Text>
+            </TouchableOpacity>
+          </View>
+          </Animated.View>
+
           {/* Bookings List */}
           <ScrollView 
             contentContainerStyle={styles.scrollContent}
             showsVerticalScrollIndicator={false}
+            onScroll={handleListScroll}
+            scrollEventThrottle={16}
             refreshControl={
-              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#fff" />
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="transparent" colors={['transparent']} />
             }
           >
+            <FootballRefreshHeader refreshing={refreshing} />
             {loading ? (
               <View style={styles.emptyContainer}>
                 <FootballLoader size="large" color="#fff" />
                 <Text style={styles.emptyText}>{i18n.t('loading') || 'Loading...'}</Text>
               </View>
-            ) : filteredBookings.length === 0 ? (
+            ) : visibleBookings.length === 0 ? (
               <View style={styles.emptyContainer}>
                 <Ionicons name="calendar-outline" size={64} color="rgba(255, 255, 255, 0.3)" />
-                <Text style={styles.emptyText}>{i18n.t('noBookings') || 'No bookings found'}</Text>
-                <Text style={styles.emptySubtext}>{i18n.t('bookingsWillAppear') || 'Your bookings will appear here'}</Text>
+                <Text style={styles.emptyText}>
+                  {statusFilter === 'cancelled'
+                    ? (i18n.t('noCancelledBookings') || 'No cancelled bookings yet')
+                    : (i18n.t('noBookings') || 'No bookings found')}
+                </Text>
+                <Text style={styles.emptySubtext}>
+                  {statusFilter === 'cancelled'
+                    ? (i18n.t('cancelledBookingsWillAppear') || 'Cancelled bookings will appear here')
+                    : (i18n.t('bookingsWillAppear') || 'Your bookings will appear here')}
+                </Text>
               </View>
             ) : (
-              filteredBookings.map((booking) => (
-                <View key={booking.id} style={styles.bookingCard}>
+              <>
+                {visibleBookings.map((booking) => (
+                  <View key={booking.id} style={styles.bookingCard}>
                   {booking.__pendingBooking ? (
                     <View style={styles.pendingPill}>
                       <Ionicons name="time-outline" size={14} color="#dbeafe" />
@@ -564,6 +671,10 @@ export default function PlayerBookingsScreen() {
                     <Text style={styles.bookingPrice}>{booking.price || 0} EGP</Text>
                   </View>
 
+                  {String(booking.status || '').toLowerCase() === 'confirmed' && (
+                    <BookingCountdown date={booking.date} time={booking.time} />
+                  )}
+
                   {!booking.__pendingBooking && String(booking.status || '').toLowerCase() === 'confirmed' && (
                     <TouchableOpacity
                       style={[styles.chatButton, { backgroundColor: '#2563eb', marginTop: 10 }]}
@@ -648,8 +759,10 @@ export default function PlayerBookingsScreen() {
                     <Text style={styles.chatButtonText}>{openingAdminChat ? (i18n.t('loading') || 'Loading...') : (i18n.t('chatToAdmin') || 'Chat to Admin')}</Text>
                   </TouchableOpacity>}
                   
-                </View>
-              ))
+                  </View>
+                ))}
+
+              </>
             )}
           </ScrollView>
         </Animated.View>
@@ -709,25 +822,60 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     minHeight: 46,
     paddingVertical: 14,
-    paddingHorizontal: 16,
+    paddingHorizontal: 10,
     borderRadius: 24,
     backgroundColor: 'rgba(255, 255, 255, 0.1)',
     gap: 8,
+    minWidth: 0,
   },
   filterButtonActive: {
     backgroundColor: '#fff',
   },
   filterButtonText: {
-    fontSize: 16,
+    flexShrink: 1,
+    fontSize: 15,
     fontWeight: '600',
     color: '#666',
+    textAlign: 'center',
   },
   filterButtonTextActive: {
     color: '#000',
   },
+  controlsWrap: {
+    overflow: 'hidden',
+  },
   scrollContent: {
     paddingHorizontal: 24,
     paddingBottom: 40,
+  },
+  sectionTabs: {
+    flexDirection: 'row',
+    paddingHorizontal: 24,
+    marginBottom: 16,
+    gap: 10,
+  },
+  sectionTab: {
+    flex: 1,
+    borderRadius: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    alignItems: 'center',
+  },
+  sectionTabActive: {
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    borderColor: 'rgba(255,255,255,0.2)',
+  },
+  sectionTabText: {
+    color: 'rgba(255,255,255,0.72)',
+    fontSize: 13,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  sectionTabTextActive: {
+    color: '#fff',
   },
   emptyContainer: {
     alignItems: 'center',
@@ -748,12 +896,13 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   bookingCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
     borderRadius: 18,
     padding: 22,
     marginBottom: 18,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderColor: 'rgba(255, 255, 255, 0.18)',
+    overflow: 'hidden',
   },
   bookingHeader: {
     flexDirection: 'row',
@@ -945,4 +1094,3 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
-

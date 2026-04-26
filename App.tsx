@@ -2,12 +2,11 @@
 import 'react-native-get-random-values';
 import 'react-native-url-polyfill/auto';
 
-// Ensure global crypto object exists for AWS SDK
+// Ensure a global crypto object exists for AWS SDK
 // react-native-get-random-values provides crypto.getRandomValues
 // but AWS SDK might need the crypto object to exist
-if (typeof global.crypto === 'undefined') {
-  // @ts-ignore - polyfill for React Native
-  global.crypto = global.crypto || {};
+if (typeof globalThis.crypto === 'undefined') {
+  globalThis.crypto = globalThis.crypto || {};
 }
 
 import { I18nManager } from 'react-native';

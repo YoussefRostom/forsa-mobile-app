@@ -8,6 +8,7 @@ import { Alert, Animated, FlatList, Image, Modal, StyleSheet, Text, TextInput, T
 import { type QueryDocumentSnapshot, type DocumentData } from 'firebase/firestore';
 import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
+import SuspendedBadge from '../components/SuspendedBadge';
 import i18n from '../locales/i18n';
 import { fetchAgentsPage, type AgentDirectoryEntry } from '../services/AgentDataService';
 type AgentRecord = AgentDirectoryEntry;
@@ -168,6 +169,18 @@ export default function AgentSearchScreen() {
     ]).start();
   };
 
+  const handleAgentPress = (agent: AgentRecord) => {
+    if (agent.isSuspended) {
+      Alert.alert(
+        i18n.t('suspendedBadge') || 'Suspended',
+        i18n.t('suspendedUserUnavailable') || 'This profile is suspended and unavailable right now.'
+      );
+      return;
+    }
+
+    setModalAgent(agent);
+  };
+
   return (
     <View style={{ flex: 1, backgroundColor: '#000' }}>
       <HamburgerMenu />
@@ -274,8 +287,8 @@ export default function AgentSearchScreen() {
         keyExtractor={item => item.id}
         renderItem={loading ? undefined : ({ item }) => (
           <TouchableOpacity
-            style={styles.card}
-            onPress={() => setModalAgent(item)}
+            style={[styles.card, item.isSuspended && styles.cardSuspended]}
+            onPress={() => handleAgentPress(item)}
             activeOpacity={0.85}
           >
             <TouchableOpacity
@@ -303,6 +316,11 @@ export default function AgentSearchScreen() {
                     <Text style={styles.cardCity}>{cityLabels[item.city] || item.city}</Text>
                   </View>
                 )}
+                {item.isSuspended ? (
+                  <View style={styles.cardBadgeWrap}>
+                    <SuspendedBadge />
+                  </View>
+                ) : null}
               </View>
             </View>
             {!!item.description && (
@@ -392,6 +410,13 @@ export default function AgentSearchScreen() {
                 style={styles.modalPrimaryBtn}
                 activeOpacity={0.85}
                 onPress={async () => {
+                  if (modalAgent.isSuspended) {
+                    Alert.alert(
+                      i18n.t('suspendedBadge') || 'Suspended',
+                      i18n.t('suspendedUserUnavailable') || 'This profile is suspended and unavailable right now.'
+                    );
+                    return;
+                  }
                   if (remainingTexts > 0) {
                     const newCount = remainingTexts - 1;
                     try {
@@ -665,6 +690,13 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.1)',
     position: 'relative',
+  },
+  cardSuspended: {
+    borderColor: '#fecaca',
+    opacity: 0.86,
+  },
+  cardBadgeWrap: {
+    marginTop: 8,
   },
   favBtn: {
     position: 'absolute',

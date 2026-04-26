@@ -90,6 +90,42 @@ async function resolveReportRecipients(allowed: Set<string>, reportId: string, a
   adminIds.forEach((adminId) => allowed.add(adminId));
 }
 
+async function resolvePostRecipients(allowed: Set<string>, postId: string): Promise<void> {
+  const postDoc = await db.collection('posts').doc(postId).get();
+  if (!postDoc.exists) return;
+
+  const data = postDoc.data() || {};
+  addIfString(allowed, data.ownerId);
+}
+
+async function resolveFollowRecipients(
+  allowed: Set<string>,
+  senderId: string,
+  data: Record<string, string | number | boolean | null> | undefined
+): Promise<void> {
+  if (data?.notificationKind !== 'follow' || data?.actorId !== senderId) {
+    return;
+  }
+
+  const followerDoc = await db
+    .collection('users')
+    .doc(String(data.actorId))
+    .collection('following')
+    .doc(String(data.userId || ''))
+    .get();
+  const followingDoc = await db
+    .collection('users')
+    .doc(String(data.userId || ''))
+    .collection('followers')
+    .doc(senderId)
+    .get();
+  const legacyFollowDoc = await db.collection('follows').doc(`${senderId}_${String(data.userId || '')}`).get();
+
+  if (followerDoc.exists || followingDoc.exists || legacyFollowDoc.exists) {
+    addIfString(allowed, data.userId);
+  }
+}
+
 async function resolveAllowedRecipients(
   senderId: string,
   data: Record<string, string | number | boolean | null> | undefined,
@@ -101,6 +137,7 @@ async function resolveAllowedRecipients(
   const conversationId = typeof data?.conversationId === 'string' ? data.conversationId : null;
   const checkInId = typeof data?.checkInId === 'string' ? data.checkInId : null;
   const reportId = typeof data?.reportId === 'string' ? data.reportId : null;
+  const postId = typeof data?.postId === 'string' ? data.postId : null;
 
   if (bookingId) {
     await resolveBookingRecipients(allowed, bookingId, adminIds);
@@ -114,6 +151,10 @@ async function resolveAllowedRecipients(
   if (reportId) {
     await resolveReportRecipients(allowed, reportId, adminIds);
   }
+  if (postId) {
+    await resolvePostRecipients(allowed, postId);
+  }
+  await resolveFollowRecipients(allowed, senderId, data);
 
   return allowed;
 }

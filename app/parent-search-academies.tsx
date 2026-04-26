@@ -11,6 +11,8 @@ import i18n from '../locales/i18n';
 import { db } from '../lib/firebase';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import FootballLoader from '../components/FootballLoader';
+import SuspendedBadge from '../components/SuspendedBadge';
+import { isSuspendedEntity } from '../lib/suspension';
 
 const cities = Object.entries(i18n.t('cities', { returnObjects: true }) as Record<string, string>).map(([key, label]) => ({ key, label }));
 const cityOptions = cities.filter(({ key }) => !['giza', 'newCairo'].includes(key));
@@ -236,6 +238,8 @@ interface Academy {
   locations?: any[];
   privateTraining?: any;
   privateTrainings?: any[];
+  isSuspended?: boolean;
+  status?: string;
 }
 
 export default function ParentSearchAcademiesScreen() {
@@ -340,7 +344,11 @@ export default function ParentSearchAcademiesScreen() {
       try {
         const academiesRef = collection(db, 'academies');
         const q = query(academiesRef);
-        const querySnapshot = await getDocs(q);
+        const [querySnapshot, usersSnapshot] = await Promise.all([
+          getDocs(q),
+          getDocs(collection(db, 'users')),
+        ]);
+        const userMap = new Map(usersSnapshot.docs.map((userDoc) => [userDoc.id, userDoc.data()]));
 
         const programsRef = collection(db, 'academy_programs');
         const pQ = query(programsRef, where('type', '==', 'private_training'));
@@ -355,6 +363,7 @@ export default function ParentSearchAcademiesScreen() {
 
         querySnapshot.forEach((doc) => {
           const data = doc.data();
+          const userData = userMap.get(doc.id);
 
           academyList.push({
             id: doc.id,
@@ -372,6 +381,8 @@ export default function ParentSearchAcademiesScreen() {
             coordinates: data.coordinates || null,
             locations: Array.isArray(data.locations) ? data.locations : [],
             privateTraining: privateProgramsMap[doc.id] || null,
+            isSuspended: isSuspendedEntity({ ...data, ...userData }),
+            status: userData?.status || data.status || '',
           });
         });
       } catch (error) {
@@ -477,6 +488,18 @@ export default function ParentSearchAcademiesScreen() {
 
     setSortBy(sortKey);
     setSortModal(false);
+  };
+
+  const handleAcademyPress = (academy: Academy) => {
+    if (academy.isSuspended) {
+      Alert.alert(
+        i18n.t('suspendedBadge') || 'Suspended',
+        i18n.t('suspendedProviderUnavailable') || 'This provider is suspended and unavailable right now.'
+      );
+      return;
+    }
+
+    router.push({ pathname: '/parent-academy-details', params: { id: academy.id } });
   };
 
   const filtered = academies
@@ -899,8 +922,8 @@ export default function ParentSearchAcademiesScreen() {
 
                 return (
                 <TouchableOpacity
-                  style={styles.card}
-                  onPress={() => router.push({ pathname: '/parent-academy-details', params: { id: item.id } })}
+                  style={[styles.card, item.isSuspended && styles.cardSuspended]}
+                  onPress={() => handleAcademyPress(item)}
                   activeOpacity={0.85}
                 >
                   <View style={styles.cardHeader}>
@@ -915,6 +938,11 @@ export default function ParentSearchAcademiesScreen() {
                       </View>
                     </View>
                   </View>
+                  {item.isSuspended && (
+                    <View style={styles.cardSuspendedBadgeRow}>
+                      <SuspendedBadge tone="light" />
+                    </View>
+                  )}
 
                   <View style={styles.cardBadgesRow}>
                     <View style={styles.cardBadge}>
@@ -1382,6 +1410,14 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.15,
     shadowRadius: 12,
     elevation: 5,
+  },
+  cardSuspended: {
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    opacity: 0.9,
+  },
+  cardSuspendedBadgeRow: {
+    marginBottom: 10,
   },
   cardHeader: {
     flexDirection: 'row',

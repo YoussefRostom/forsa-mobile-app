@@ -12,6 +12,8 @@ import { doc, getDoc } from 'firebase/firestore';
 import { createBookingWithTransaction, getLocalDateInput } from '../services/MonetizationService';
 import { addPendingBooking, completePendingBooking, failPendingBooking } from '../lib/pendingBookingStore';
 import FootballLoader from '../components/FootballLoader';
+import SuspendedBadge from '../components/SuspendedBadge';
+import { isSuspendedEntity } from '../lib/suspension';
 
 function createMinimumBookingDate() {
   const minimumDate = new Date();
@@ -141,6 +143,7 @@ export default function ParentClinicDetailsScreen() {
 
   const branches = normalizeBookingBranches(clinic?.locations);
   const selectedBranch = branches.find((branch) => branch.id === selectedBranchId) || null;
+  const clinicSuspended = isSuspendedEntity(clinic);
 
   useEffect(() => {
     const defaultBranchId = branches[0]?.id || '';
@@ -151,7 +154,8 @@ export default function ParentClinicDetailsScreen() {
     try {
       setLoading(true);
       const docRef = doc(db, 'clinics', id);
-      const docSnap = await getDoc(docRef);
+      const [docSnap, userSnap] = await Promise.all([getDoc(docRef), getDoc(doc(db, 'users', id))]);
+      const userData = userSnap.exists() ? userSnap.data() : {};
 
       if (docSnap.exists()) {
         const data = docSnap.data();
@@ -219,7 +223,9 @@ export default function ParentClinicDetailsScreen() {
           locations: Array.isArray(data.locations) ? data.locations : [],
           services: servicesList,
           workingHours: workingHoursList,
-          doctors: Array.from(doctorNames)
+          doctors: Array.from(doctorNames),
+          isSuspended: userData?.isSuspended === true,
+          status: userData?.status || '',
         });
       } else {
       }
@@ -377,11 +383,20 @@ export default function ParentClinicDetailsScreen() {
       Alert.alert(i18n.t('error'), i18n.t('loginRequired') || 'You must be logged in to book');
       return;
     }
+    if (clinicSuspended) {
+      Alert.alert(i18n.t('error') || 'Error', i18n.t('suspendedProviderBookingUnavailable') || 'This provider is suspended and cannot receive bookings right now.');
+      return;
+    }
 
     if (branches.length > 0 && !selectedBranch) {
       Alert.alert(i18n.t('error') || 'Error', i18n.t('selectBranch') || 'Please select a branch');
       return;
     }
+
+    Alert.alert(
+      i18n.t('keepAppOpenTitle') || 'Keep App Open',
+      i18n.t('keepAppOpenBookingMessage') || 'Please keep the app open until the reservation finishes.'
+    );
 
     const doctorName = i18n.t('noSpecificDoctor') || 'No specific doctor';
     const serviceList = clinic.services && clinic.services.length > 0 ? clinic.services : [];
@@ -475,6 +490,7 @@ export default function ParentClinicDetailsScreen() {
             <View style={styles.headerContent}>
               <Text style={styles.headerTitle}>{clinic.name}</Text>
               <Text style={styles.headerSubtitle}>{i18n.t('clinicDetails') || 'Clinic Information'}</Text>
+              {clinicSuspended && <SuspendedBadge />}
             </View>
             <TouchableOpacity style={styles.callButton} onPress={handleCall}>
               <Ionicons name="call" size={24} color="#fff" />
@@ -639,6 +655,11 @@ export default function ParentClinicDetailsScreen() {
 
             {/* Book appointment: service, comments, reserve */}
             <View style={styles.bookingCard}>
+              {clinicSuspended && (
+                <View style={styles.suspensionNotice}>
+                  <Text style={styles.suspensionNoticeText}>{i18n.t('suspendedProviderBookingUnavailable') || 'This provider is suspended and cannot receive bookings right now.'}</Text>
+                </View>
+              )}
               <View style={styles.cardHeader}>
                 <Ionicons name="calendar" size={24} color="#000" />
                 <Text style={styles.cardTitle}>{i18n.t('bookAppointment') || 'Book appointment'}</Text>
@@ -817,9 +838,9 @@ export default function ParentClinicDetailsScreen() {
               </View>
 
               <TouchableOpacity
-                style={[styles.reserveButton, (bookingLoading || !selectedShift || !resolvedPreferredTime) && styles.reserveButtonDisabled]}
+                style={[styles.reserveButton, (bookingLoading || !selectedShift || !resolvedPreferredTime || clinicSuspended) && styles.reserveButtonDisabled]}
                 onPress={() => handleReserve()}
-                disabled={bookingLoading || !clinic.services || clinic.services.length === 0 || !selectedShift || !resolvedPreferredTime}
+                disabled={bookingLoading || !clinic.services || clinic.services.length === 0 || !selectedShift || !resolvedPreferredTime || clinicSuspended}
                 activeOpacity={0.8}
               >
                 {bookingLoading ? (
@@ -1171,6 +1192,20 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 20,
     elevation: 10,
+  },
+  suspensionNotice: {
+    marginBottom: 14,
+    backgroundColor: '#fef2f2',
+    borderColor: '#fecaca',
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+  },
+  suspensionNoticeText: {
+    color: '#b91c1c',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
   },
   bookingLabel: {
     fontSize: 14,

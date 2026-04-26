@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
+import { useOnboarding } from '../context/OnboardingContext';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { doc, setDoc } from 'firebase/firestore';
 import React, { useRef, useState } from 'react';
@@ -36,6 +37,7 @@ import {
 } from '../lib/validations';
 import i18n from '../locales/i18n';
 import FootballLoader from '../components/FootballLoader';
+import SignupStepBar from '../components/SignupStepBar';
 import { notifyAdminsOfNewSignup } from '../services/SignupNotificationService';
 // OTP functionality commented out - direct Firebase signup enabled
 // import OtpModal from '../components/OtpModal';
@@ -54,6 +56,7 @@ interface Errors {
 
 const SignupParent = () => {
   const router = useRouter();
+  const { startOnboarding } = useOnboarding();
   const [parentName, setParentName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
@@ -216,19 +219,17 @@ const SignupParent = () => {
 
       // Prevent duplicates across legacy/raw and canonical phone identities
       const phoneCandidates = getPhoneIdentityCandidates(phone);
-      for (const candidate of phoneCandidates) {
-        const existingAuth = await lookupPhoneIndex(candidate);
-        if (existingAuth) {
-          throw { code: 'forsa/phone-already-in-use' };
-        }
+      const [existingPhoneMatches, existingEmailAuth] = await Promise.all([
+        Promise.all(phoneCandidates.map((candidate) => lookupPhoneIndex(candidate))),
+        userEmailForIndex ? lookupEmailIndex(userEmailForIndex) : Promise.resolve(null),
+      ]);
+      if (existingPhoneMatches.some(Boolean)) {
+        throw { code: 'forsa/phone-already-in-use' };
       }
 
       // Pre-check: if email provided, ensure it is not already taken
-      if (userEmailForIndex) {
-        const existingAuth = await lookupEmailIndex(userEmailForIndex);
-        if (existingAuth) {
-          throw { code: 'forsa/email-already-in-use' };
-        }
+      if (existingEmailAuth) {
+        throw { code: 'forsa/email-already-in-use' };
       }
 
       // console.log('[Signup] Creating Firebase user with email:', authEmail);
@@ -251,34 +252,29 @@ const SignupParent = () => {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
-      await setDoc(doc(db, 'users', uid), userData, { merge: true });
-      await setDoc(doc(db, 'parents', uid), userData);
+      await Promise.all([
+        setDoc(doc(db, 'users', uid), userData, { merge: true }),
+        setDoc(doc(db, 'parents', uid), userData),
+        userEmailForIndex ? writeEmailIndex(userEmailForIndex, authEmail) : Promise.resolve(),
+        writePhoneIndex(phoneForAuth, authEmail),
+      ]);
 
       // Save email → authEmail mapping for email-based login
-      if (userEmailForIndex) {
-        await writeEmailIndex(userEmailForIndex, authEmail);
-      }
-      await writePhoneIndex(phoneForAuth, authEmail);
-
-      try {
-        await notifyAdminsOfNewSignup({
-          signupUserId: uid,
-          role: 'parent',
-          userData,
-        });
-      } catch (error) {
-        console.warn('[SignupParent] Failed to notify admins about new signup:', error);
-      }
-
-      // Step 3: Generate check-in code (non-blocking)
-      try {
-        const { ensureCheckInCodeForCurrentUser } = await import('../services/CheckInCodeService');
-        await ensureCheckInCodeForCurrentUser();
-      } catch { }
-
       // Step 4: User is already signed in, redirect to dashboard
       // console.log('[Signup] User is logged in and navigating to parent-feed...');
-      router.replace('/parent-feed');
+      startOnboarding('parent');
+
+      void notifyAdminsOfNewSignup({
+        signupUserId: uid,
+        role: 'parent',
+        userData,
+      }).catch((error) => {
+        console.warn('[SignupParent] Failed to notify admins about new signup:', error);
+      });
+
+      void import('../services/CheckInCodeService')
+        .then(({ ensureCheckInCodeForCurrentUser }) => ensureCheckInCodeForCurrentUser())
+        .catch(() => undefined);
     } catch (err: any) {
       // console.log('[Signup] Error:', err.message, err);
       let errorMsg = i18n.t('signupFailedMessage');
@@ -343,11 +339,17 @@ const SignupParent = () => {
             </View>
           </View>
 
+          <SignupStepBar
+            currentStep={2}
+            totalSteps={3}
+            stepLabels={['Account Type', 'Your Profile', 'Get Started']}
+          />
+
           <ScrollView
             ref={scrollViewRef}
             contentContainerStyle={styles.scrollContent}
-            keyboardShouldPersistTaps="always"
-            keyboardDismissMode="none"
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
             showsVerticalScrollIndicator={false}
           >
             {formError && (

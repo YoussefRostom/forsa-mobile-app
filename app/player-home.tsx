@@ -85,16 +85,16 @@ export default function PlayerHomeScreen() {
               {/* Action Buttons */}
               <TouchableOpacity 
                 style={styles.actionButton} 
-                onPress={() => router.push('/player-edit-profile')}
+                onPress={() => router.push('/player-profile')}
                 activeOpacity={0.8}
               >
                 <Ionicons name="create-outline" size={20} color="#fff" style={styles.buttonIcon} />
-                <Text style={styles.actionButtonText}>{i18n.t('editProfile') || 'Edit Profile'}</Text>
+                <Text style={styles.actionButtonText}>{i18n.t('myProfile') || 'My Profile'}</Text>
         </TouchableOpacity>
 
               <TouchableOpacity 
                 style={styles.actionButton} 
-                onPress={() => router.push('/player-profile')}
+                onPress={() => router.push('/player-upload-media')}
                 activeOpacity={0.8}
               >
                 <Ionicons name="cloud-upload-outline" size={20} color="#fff" style={styles.buttonIcon} />

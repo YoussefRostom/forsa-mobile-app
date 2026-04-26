@@ -28,6 +28,8 @@ export default function ParentEditProfileScreen() {
   const [cityModal, setCityModal] = useState(false);
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
   const [profilePhotoUrl, setProfilePhotoUrl] = useState<string | null>(null);
+  const [initialEmail, setInitialEmail] = useState('');
+  const [initialPhone, setInitialPhone] = useState('');
   const fadeAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -59,6 +61,8 @@ export default function ParentEditProfileScreen() {
         setName(data.parentName || '');
         setEmail(data.email || '');
         setPhone(data.phone || '');
+        setInitialEmail(data.email || '');
+        setInitialPhone(data.phone || '');
         setCity(data.city || '');
         if (data.profilePhoto) {
           setProfilePhoto(data.profilePhoto);
@@ -74,6 +78,8 @@ export default function ParentEditProfileScreen() {
           setName(data.parentName || data.name || '');
           setEmail(data.email || '');
           setPhone(data.phone || '');
+          setInitialEmail(data.email || '');
+          setInitialPhone(data.phone || '');
           setCity(data.city || '');
           if (data.profilePhoto) {
             setProfilePhoto(data.profilePhoto);
@@ -142,14 +148,14 @@ export default function ParentEditProfileScreen() {
         }
       }
       const updateData: any = {
-        phone: phone.trim(),
+        phone: initialPhone || null,
         updatedAt: new Date().toISOString(),
         username: resolveUserDisplayName({ parentName: name }, 'Parent'),
       };
 
       // Only include optional fields if they have values
       if (name && name.trim()) updateData.parentName = name.trim();
-      if (email && email.trim()) updateData.email = email.trim();
+      updateData.email = initialEmail || null;
       if (city && city.trim()) updateData.city = city.trim();
       if (finalProfilePhotoUrl) updateData.profilePhoto = finalProfilePhotoUrl;
 
@@ -248,18 +254,17 @@ export default function ParentEditProfileScreen() {
 
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>{i18n.t('email')}</Text>
-                <View style={styles.inputWrapper}>
-                  <Ionicons name="mail-outline" size={20} color="#999" style={styles.inputIcon} />
+                <View style={[styles.inputWrapper, styles.disabledInputWrapper]}>
+                  <Ionicons name="mail-outline" size={20} color="#bbb" style={styles.inputIcon} />
                   <TextInput
-                    style={styles.input}
+                    style={[styles.input, styles.disabledInput]}
                     value={email}
-                    onChangeText={setEmail}
                     placeholder={i18n.t('email_ph')}
-                    placeholderTextColor="#999"
-                    keyboardType="email-address"
-                    autoCapitalize="none"
+                    placeholderTextColor="#bbb"
+                    editable={false}
                   />
                 </View>
+                <Text style={styles.fieldHint}>{i18n.t('signInEmailLockedHint') || 'Email changes are locked for now.'}</Text>
               </View>
 
               <View style={[styles.inputGroup, styles.inputGroupNoMargin]}>
@@ -269,14 +274,12 @@ export default function ParentEditProfileScreen() {
                   <TextInput
                     style={[styles.input, styles.disabledInput]}
                     value={phone}
-                    onChangeText={setPhone}
                     placeholder={i18n.t('phone_ph')}
                     placeholderTextColor="#bbb"
-                    keyboardType="phone-pad"
                     editable={false}
                   />
                 </View>
-                <Text style={styles.fieldHint}>{i18n.t('phoneSecurityHint') || 'Phone number is fixed for account security.'}</Text>
+                <Text style={styles.fieldHint}>{i18n.t('signInPhoneLockedHint') || 'Phone number changes are locked for now.'}</Text>
               </View>
             </View>
 
@@ -513,6 +516,12 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#111827',
     paddingVertical: 16,
+  },
+  phonePrefix: {
+    color: '#999',
+    fontSize: 16,
+    fontWeight: '600',
+    marginRight: 8,
   },
   disabledInputWrapper: {
     backgroundColor: '#f3f4f6',

@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+import FeedVideoPreview from './FeedVideoPreview';
 
 type MediaKind = 'image' | 'video';
 
@@ -201,13 +202,7 @@ function ZoomableFeedMedia({ post }: { post: any }) {
       ]}
     >
       {item.type === 'video' ? (
-        <Video
-          source={{ uri: item.uri }}
-          style={styles.previewMedia}
-          useNativeControls
-          resizeMode={ResizeMode.COVER}
-          isLooping={false}
-        />
+        <FeedVideoPreview uri={item.uri} imageStyle={styles.previewMedia} />
       ) : (
         <Image
           source={{ uri: item.uri }}

@@ -37,13 +37,13 @@ function resolvePushChannelId(data?: Record<string, string | number | boolean>):
 }
 
 function normalizeExpoPushTokens(value: unknown): string[] {
-  if (typeof value === 'string' && value.startsWith('ExponentPushToken')) {
+  if (typeof value === 'string' && /^(Expo|Exponent)PushToken/.test(value)) {
     return [value];
   }
 
   if (Array.isArray(value)) {
     return value.filter(
-      (item): item is string => typeof item === 'string' && item.startsWith('ExponentPushToken')
+      (item): item is string => typeof item === 'string' && /^(Expo|Exponent)PushToken/.test(item)
     );
   }
 

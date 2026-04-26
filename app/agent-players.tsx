@@ -9,10 +9,12 @@ import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import SimpleSelect from '../components/SimpleSelect';
 import i18n from '../locales/i18n';
+import { db, auth } from '../lib/firebase';
 import { startConversationWithUser } from '../services/BookingMessagingService';
 import { fetchAgentPlayersPage, type AgentPlayer } from '../services/AgentDataService';
-import { type QueryDocumentSnapshot, type DocumentData } from 'firebase/firestore';
+import { collection, onSnapshot, type QueryDocumentSnapshot, type DocumentData } from 'firebase/firestore';
 import FootballLoader from '../components/FootballLoader';
+import { toggleFollow } from '../services/FollowService';
 
 // Define the Player type for type safety
 type Player = AgentPlayer;
@@ -77,10 +79,13 @@ export default function AgentPlayersScreen() {
   const [selectedPlayer, setSelectedPlayer] = useState<Player | null>(null);
   const [showProfile, setShowProfile] = useState(false);
   const [favorites, setFavorites] = useState<string[]>([]);
+  const [followStates, setFollowStates] = useState<Record<string, boolean>>({});
   const favoriteAnims = useRef(new Map<string, Animated.Value>()).current;
+  const followAnims = useRef(new Map<string, Animated.Value>()).current;
   const { openMenu } = useHamburgerMenu();
   const router = useRouter();
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const currentUid = auth.currentUser?.uid || '';
 
   React.useEffect(() => {
     Animated.timing(fadeAnim, {
@@ -98,9 +103,33 @@ export default function AgentPlayersScreen() {
     }).catch(() => {});
   }, []);
 
+  useEffect(() => {
+    if (!currentUid) {
+      setFollowStates({});
+      return;
+    }
+
+    return onSnapshot(
+      collection(db, `users/${currentUid}/following`),
+      (snap) => {
+        const next: Record<string, boolean> = {};
+        snap.docs.forEach((docSnap) => {
+          next[docSnap.id] = true;
+        });
+        setFollowStates(next);
+      },
+      () => setFollowStates({})
+    );
+  }, [currentUid]);
+
   const getFavAnim = (id: string) => {
     if (!favoriteAnims.has(id)) favoriteAnims.set(id, new Animated.Value(1));
     return favoriteAnims.get(id)!;
+  };
+
+  const getFollowAnim = (id: string) => {
+    if (!followAnims.has(id)) followAnims.set(id, new Animated.Value(1));
+    return followAnims.get(id)!;
   };
 
   const toggleFavorite = async (id: string) => {
@@ -112,6 +141,29 @@ export default function AgentPlayersScreen() {
       Animated.timing(anim, { toValue: 1.4, duration: 120, useNativeDriver: true }),
       Animated.timing(anim, { toValue: 1, duration: 120, useNativeDriver: true }),
     ]).start();
+  };
+
+  const handleToggleFollow = async (player: Player) => {
+    const displayName = `${player.firstName || ''} ${player.lastName || ''}`.trim() || 'Player';
+    const currentState = !!followStates[player.id];
+
+    setFollowStates((prev) => ({ ...prev, [player.id]: !currentState }));
+
+    if (!currentState) {
+      const anim = getFollowAnim(player.id);
+      Animated.sequence([
+        Animated.timing(anim, { toValue: 1.12, duration: 120, useNativeDriver: true }),
+        Animated.timing(anim, { toValue: 1, duration: 120, useNativeDriver: true }),
+      ]).start();
+    }
+
+    try {
+      const isFollowingNow = await toggleFollow(player.id, 'player', displayName, player.profilePhoto || '');
+      setFollowStates((prev) => ({ ...prev, [player.id]: isFollowingNow }));
+    } catch (error) {
+      setFollowStates((prev) => ({ ...prev, [player.id]: currentState }));
+      console.error('Agent players follow toggle failed:', error);
+    }
   };
 
   const loadInitialPlayers = async () => {
@@ -378,6 +430,17 @@ export default function AgentPlayersScreen() {
                         </View>
                       )}
                     </View>
+                    <Animated.View style={[styles.followActionRow, { transform: [{ scale: getFollowAnim(item.id) }] }]}>
+                      <TouchableOpacity
+                        style={[styles.followButton, followStates[item.id] && styles.followButtonActive]}
+                        onPress={() => handleToggleFollow(item)}
+                        activeOpacity={0.85}
+                      >
+                        <Text style={[styles.followButtonText, followStates[item.id] && styles.followButtonTextActive]}>
+                          {followStates[item.id] ? (i18n.t('following') || 'Following') : (i18n.t('follow') || 'Follow')}
+                        </Text>
+                      </TouchableOpacity>
+                    </Animated.View>
                     {item.pinnedVideo && (
                       <View style={styles.videoSection}>
                         <VideoWithNaturalSize uri={item.pinnedVideo} />
@@ -781,6 +844,31 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   badgeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  followActionRow: {
+    alignItems: 'flex-start',
+  },
+  followButton: {
+    minWidth: 88,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#111827',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+  },
+  followButtonActive: {
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#10b981',
+  },
+  followButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  followButtonTextActive: {
+    color: '#065f46',
+  },
   badge: {
     backgroundColor: '#000',
     borderRadius: 20,

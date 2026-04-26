@@ -1,12 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useRouter } from 'expo-router';
-import React, { useRef, useState, useEffect } from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Animated, Easing, FlatList, KeyboardAvoidingView, Platform, StyleSheet, Text, TouchableOpacity, View, Image, Alert } from 'react-native';
 import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import i18n from '../locales/i18n';
-import { subscribeToConversations, Conversation, findAdminUserId, getOrCreateConversation } from '../services/MessagingService';
+import { subscribeToConversations, Conversation, findAdminUserId, getOrCreateConversation, clearConversationUnreadCache } from '../services/MessagingService';
 import { auth } from '../lib/firebase';
 import FootballLoader from '../components/FootballLoader';
 
@@ -70,6 +70,27 @@ export default function AgentContactsScreen() {
     setRefreshKey((prev) => prev + 1);
   };
 
+  const openConversation = (conversation: Conversation, displayName: string) => {
+    clearConversationUnreadCache(conversation.id);
+    setConversations((prev) =>
+      prev.map((item) => (item.id === conversation.id ? { ...item, unreadCount: 0 } : item))
+    );
+    router.push({
+      pathname: '/agent-messages',
+      params: {
+        conversationId: conversation.id,
+        otherUserId: conversation.otherParticipantId || '',
+        name: displayName,
+      },
+    });
+  };
+
+  useFocusEffect(
+    useCallback(() => {
+      setRefreshKey((k) => k + 1);
+    }, [])
+  );
+
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <LinearGradient
@@ -124,14 +145,7 @@ export default function AgentContactsScreen() {
             return (
               <TouchableOpacity
                 style={styles.contactCard}
-                onPress={() => router.push({ 
-                  pathname: '/agent-messages', 
-                  params: { 
-                    conversationId: item.id,
-                    otherUserId: item.otherParticipantId || '',
-                    name: displayName 
-                  } 
-                })}
+                onPress={() => openConversation(item, displayName)}
                 activeOpacity={0.8}
               >
                 <View style={styles.avatar}>

@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { db } from '../config/firebase';
+import admin, { auth as adminAuth, db } from '../config/firebase';
 import { sendSuccess, sendError } from '../utils/response.util';
 import { createNotificationForUser } from '../utils/notification.util';
 import { resolveUserDisplayName } from '../utils/displayName.util';
@@ -218,6 +218,153 @@ export async function updateUserStatus(req: Request, res: Response, next: NextFu
       sendError(res, 'VALIDATION_ERROR', 'Invalid input data', error.errors, 400);
       return;
     }
+    next(error);
+  }
+}
+
+async function recursiveDeleteDoc(ref: FirebaseFirestore.DocumentReference): Promise<void> {
+  await db.recursiveDelete(ref);
+}
+
+async function deleteDocsFromSnapshot(
+  snapshot: FirebaseFirestore.QuerySnapshot<FirebaseFirestore.DocumentData>
+): Promise<void> {
+  await Promise.all(snapshot.docs.map((docSnap) => recursiveDeleteDoc(docSnap.ref)));
+}
+
+async function deleteByField(collectionName: string, field: string, value: string): Promise<void> {
+  const snapshot = await db.collection(collectionName).where(field, '==', value).get();
+  await deleteDocsFromSnapshot(snapshot);
+}
+
+async function deleteByDocumentIdFromCollectionGroup(collectionName: string, docId: string): Promise<void> {
+  const snapshot = await db
+    .collectionGroup(collectionName)
+    .where(admin.firestore.FieldPath.documentId(), '==', docId)
+    .get();
+
+  await Promise.all(snapshot.docs.map((docSnap) => docSnap.ref.delete()));
+}
+
+async function deleteByFieldFromCollectionGroup(collectionName: string, field: string, value: string): Promise<void> {
+  const snapshot = await db.collectionGroup(collectionName).where(field, '==', value).get();
+  await Promise.all(snapshot.docs.map((docSnap) => docSnap.ref.delete()));
+}
+
+/**
+ * @swagger
+ * /api/admin/users/{id}:
+ *   delete:
+ *     summary: Permanently delete a user and related app data (Admin only)
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: User deleted permanently
+ */
+export async function deleteUserPermanently(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { id } = req.params;
+    const userDocRef = db.collection('users').doc(id);
+    const userDoc = await userDocRef.get();
+
+    if (!userDoc.exists) {
+      sendError(res, 'NOT_FOUND', 'User not found', null, 404);
+      return;
+    }
+
+    const userData = userDoc.data() || {};
+    const role = String(userData.role || '').toLowerCase();
+    const profileCollection = role ? getProfileCollectionForRole(role) : null;
+
+    const followersSnap = await userDocRef.collection('followers').get();
+    const followingSnap = await userDocRef.collection('following').get();
+
+    await Promise.all([
+      ...followersSnap.docs.map((followerDoc) =>
+        db.collection('users').doc(followerDoc.id).collection('following').doc(id).delete().catch(() => null)
+      ),
+      ...followingSnap.docs.map((followingDoc) =>
+        db.collection('users').doc(followingDoc.id).collection('followers').doc(id).delete().catch(() => null)
+      ),
+    ]);
+
+    const postsSnap = await db.collection('posts').where('ownerId', '==', id).get();
+    const ownedPostIds = postsSnap.docs.map((docSnap) => docSnap.id);
+    const mediaIds = postsSnap.docs
+      .map((docSnap) => String(docSnap.data()?.mediaId || '').trim())
+      .filter((value) => value.length > 0);
+
+    const repostSnapshots = await Promise.all(
+      ownedPostIds.map((postId) => db.collection('posts').where('originalPostId', '==', postId).get())
+    );
+    await Promise.all(repostSnapshots.map((repostsSnap) => deleteDocsFromSnapshot(repostsSnap)));
+
+    await deleteDocsFromSnapshot(postsSnap);
+
+    await Promise.all(mediaIds.map((mediaId) => recursiveDeleteDoc(db.collection('media').doc(mediaId)).catch(() => null)));
+
+    await Promise.all([
+      deleteByField('media', 'ownerId', id),
+      deleteByField('notifications', 'userId', id),
+      deleteByField('reports', 'reporterId', id),
+      deleteByField('reports', 'targetId', id),
+      deleteByField('admin_notes', 'targetUserId', id),
+      deleteByField('admin_messages', 'userId', id),
+      ...['playerId', 'parentId', 'userId', 'academyId', 'clinicId', 'providerId'].map((field) =>
+        deleteByField('bookings', field, id)
+      ),
+      deleteByField('checkins', 'userId', id),
+      deleteByField('checkins', 'locationId', id),
+      deleteByField('conversations', 'participant1Id', id),
+      deleteByField('conversations', 'participant2Id', id),
+      deleteByFieldFromCollectionGroup('comments', 'authorId', id),
+      deleteByFieldFromCollectionGroup('likes', 'userId', id),
+      deleteByFieldFromCollectionGroup('reposts', 'userId', id),
+      deleteByDocumentIdFromCollectionGroup('blocked', id),
+    ]);
+
+    if (profileCollection) {
+      await recursiveDeleteDoc(db.collection(profileCollection).doc(id)).catch(() => null);
+    }
+
+    if (role === 'academy') {
+      await deleteByField('academy_programs', 'academyId', id);
+    }
+
+    await recursiveDeleteDoc(userDocRef);
+
+    await db.collection('admin_logs').add({
+      adminUid: req.user?.userId || null,
+      actionType: 'user_soft_deleted',
+      targetCollection: 'users',
+      targetId: id,
+      reason: 'User permanently deleted by admin',
+      metadata: {
+        deletedRole: role || null,
+        deletedEmail: typeof userData.email === 'string' ? userData.email : null,
+      },
+      timestamp: new Date(),
+    });
+
+    try {
+      await adminAuth.deleteUser(id);
+    } catch (error: any) {
+      const code = String(error?.code || '');
+      if (code !== 'auth/user-not-found') {
+        throw error;
+      }
+    }
+
+    sendSuccess(res, { id }, 'User deleted permanently');
+  } catch (error) {
     next(error);
   }
 }
@@ -477,4 +624,3 @@ export async function collectRevenue(req: Request, res: Response, next: NextFunc
     next(error);
   }
 }
-

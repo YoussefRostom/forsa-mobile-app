@@ -1,12 +1,15 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { collection, onSnapshot, getFirestore, orderBy, query, where } from 'firebase/firestore';
+import { collection, doc, getDoc, onSnapshot, getFirestore, orderBy, query, where } from 'firebase/firestore';
 import React, { useRef, useState } from 'react';
 import { Animated, Easing, FlatList, Image, KeyboardAvoidingView, Modal, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Video, ResizeMode } from 'expo-av';
 import HamburgerMenu from '../components/HamburgerMenu';
 import { useHamburgerMenu } from '../components/HamburgerMenuContext';
 import PostActionsMenu from '../components/PostActionsMenu';
+import CommentsSheet from '../components/feed/CommentsSheet';
+import FeedAuthorAvatar from '../components/feed/FeedAuthorAvatar';
+import PostSocialActions from '../components/feed/PostSocialActions';
 import UploadProgressBanner from '../components/UploadProgressBanner';
 import ZoomableFeedMedia from '../components/feed/ZoomableFeedMedia';
 import i18n from '../locales/i18n';
@@ -23,6 +26,9 @@ export default function AcademyFeedScreen() {
   const [adminPosts, setAdminPosts] = useState<any[]>([]);
   const [academyPostsReady, setAcademyPostsReady] = useState(false);
   const [adminPostsReady, setAdminPostsReady] = useState(false);
+  const [commentsPostId, setCommentsPostId] = useState<string | null>(null);
+  const [currentUserName, setCurrentUserName] = useState<string>('');
+  const [currentUserPhoto, setCurrentUserPhoto] = useState<string | null>(null);
 
   // Merge academy posts and admin posts (deduplicate by post ID)
   React.useEffect(() => {
@@ -54,6 +60,26 @@ export default function AcademyFeedScreen() {
       useNativeDriver: true,
     }).start();
   }, [fadeAnim]);
+
+  React.useEffect(() => {
+    const user = auth.currentUser;
+    if (!user) return;
+    const db = getFirestore();
+    getDoc(doc(db, 'users', user.uid)).then((snap) => {
+      if (!snap.exists()) return;
+      const data = snap.data();
+      const fullName = `${data?.firstName || ''} ${data?.lastName || ''}`.trim();
+      const name = data?.academyName || data?.name || fullName || data?.email || 'Academy';
+      setCurrentUserName(name);
+      const photo = data?.profilePhoto || data?.profilePic || data?.photo || data?.avatarUrl || null;
+      setCurrentUserPhoto(photo);
+    }).catch(() => {});
+  }, []);
+
+  const getAuthorAvatarUri = (item: any) => {
+    const candidate = item?.authorPhoto || item?.ownerPhoto || item?.profilePhoto || item?.profilePic || item?.photo || item?.avatarUrl;
+    return typeof candidate === 'string' && candidate.length > 0 ? candidate : null;
+  };
 
   React.useEffect(() => {
     if (academyPostsReady && adminPostsReady) {
@@ -239,17 +265,13 @@ export default function AcademyFeedScreen() {
       : item.createdAt?.seconds 
         ? new Date(item.createdAt.seconds * 1000)
         : null;
+    const avatarUri = getAuthorAvatarUri(item);
 
     return (
       <View style={styles.feedCard}>
         <View style={styles.feedHeader}>
           <View style={styles.feedAuthorContainer}>
-            <Ionicons 
-              name={item.type === 'agent' ? 'person-circle' : item.type === 'player' ? 'football' : 'school'} 
-              size={24} 
-              color={item.type === 'agent' ? '#007AFF' : item.type === 'player' ? '#bfa100' : '#000'} 
-              style={styles.feedIcon}
-            />
+            <FeedAuthorAvatar uri={avatarUri} name={item.author} />
             <View style={styles.feedAuthorTextContainer}>
               <Text 
                 style={[styles.feedAuthor, item.type === 'agent' && styles.feedAuthorAgent, item.type === 'player' && styles.feedAuthorPlayer]}
@@ -288,9 +310,28 @@ export default function AcademyFeedScreen() {
         <ZoomableFeedMedia post={item} />
         
         <Text style={styles.feedContent}>{item.content || ''}</Text>
+
+        {item.isRepost && (
+          <View style={styles.repostBanner}>
+            <Ionicons name="repeat-outline" size={13} color="#047857" />
+            <Text style={styles.repostBannerText}>
+              {i18n.t('repostedBy') || 'Reposted'}{item.originalAuthorName ? ` · ${item.originalAuthorName}` : ''}
+            </Text>
+          </View>
+        )}
+
+        <PostSocialActions
+          post={item}
+          onCommentPress={() => setCommentsPostId(item.id)}
+          currentUserName={currentUserName}
+          currentUserPhoto={currentUserPhoto}
+          viewerRole="academy"
+        />
       </View>
     );
   };
+
+  const selectedCommentsPost = commentsPostId ? feed.find((p) => p.id === commentsPostId) : null;
 
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -340,6 +381,17 @@ export default function AcademyFeedScreen() {
       )}
         </Animated.View>
       </LinearGradient>
+
+      {commentsPostId && (
+        <CommentsSheet
+          postId={commentsPostId}
+          postOwnerId={selectedCommentsPost?.ownerId}
+          visible={!!commentsPostId}
+          onClose={() => setCommentsPostId(null)}
+          currentUserName={currentUserName}
+          currentUserPhoto={currentUserPhoto}
+        />
+      )}
 
       {/* Full Screen Media Viewer */}
       <Modal
@@ -456,9 +508,6 @@ const styles = StyleSheet.create({
     minWidth: 0,
     marginRight: 8,
   },
-  feedIcon: {
-    marginRight: 12,
-  },
   feedAuthorTextContainer: {
     flex: 1,
     flexShrink: 1,
@@ -485,6 +534,17 @@ const styles = StyleSheet.create({
     color: '#222',
     lineHeight: 22,
     marginTop: 12,
+  },
+  repostBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: 8,
+  },
+  repostBannerText: {
+    fontSize: 12,
+    color: '#047857',
+    fontWeight: '600',
   },
   feedTime: {
     fontSize: 12,

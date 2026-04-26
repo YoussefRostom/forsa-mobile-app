@@ -11,6 +11,8 @@ import i18n from '../locales/i18n';
 import { LinearGradient } from 'expo-linear-gradient';
 import { addPendingBooking, completePendingBooking, failPendingBooking } from '../lib/pendingBookingStore';
 import FootballLoader from '../components/FootballLoader';
+import SuspendedBadge from '../components/SuspendedBadge';
+import { isSuspendedEntity } from '../lib/suspension';
 
 type Academy = {
   id: string;
@@ -41,6 +43,8 @@ type Academy = {
     longitude?: number | null;
   }[];
   profilePhoto?: string;
+  isSuspended?: boolean;
+  status?: string;
 };
 
 function formatTimeForDisplay(time24: string): string {
@@ -197,6 +201,8 @@ export default function ParentAcademyDetailsScreen() {
     const fetchAcademy = async () => {
       try {
         const academyDoc = await getDoc(doc(db, 'academies', academyId));
+        const userDoc = await getDoc(doc(db, 'users', academyId));
+        const userData = userDoc.exists() ? userDoc.data() : {};
         if (academyDoc.exists()) {
           const data = academyDoc.data();
           setAcademy({
@@ -218,6 +224,8 @@ export default function ParentAcademyDetailsScreen() {
             locations: data.locations || [],
             images: data.images || [],
             profilePhoto: data.profilePhoto || '',
+            isSuspended: userData?.isSuspended === true,
+            status: userData?.status || '',
           });
           setOfferings(data.offerings || []);
           setPosts(data.posts || []);
@@ -262,6 +270,7 @@ export default function ParentAcademyDetailsScreen() {
 
   const branches = normalizeBookingBranches(academy?.locations);
   const selectedBranch = branches.find((branch) => branch.id === selectedBranchId) || null;
+  const academySuspended = isSuspendedEntity(academy);
 
   useEffect(() => {
     const defaultBranchId = branches[0]?.id || '';
@@ -315,11 +324,20 @@ export default function ParentAcademyDetailsScreen() {
       Alert.alert(i18n.t('error'), i18n.t('loginRequired') || 'You must be logged in to book');
       return;
     }
+    if (academySuspended) {
+      Alert.alert(i18n.t('error') || 'Error', i18n.t('suspendedProviderBookingUnavailable') || 'This provider is suspended and cannot receive bookings right now.');
+      return;
+    }
 
     if (branches.length > 0 && !selectedBranch) {
       Alert.alert(i18n.t('error') || 'Error', i18n.t('selectBranch') || 'Please select a branch');
       return;
     }
+
+    Alert.alert(
+      i18n.t('keepAppOpenTitle') || 'Keep App Open',
+      i18n.t('keepAppOpenBookingMessage') || 'Please keep the app open until the reservation finishes.'
+    );
 
     setBookingLoading(true);
 
@@ -398,11 +416,20 @@ export default function ParentAcademyDetailsScreen() {
       Alert.alert(i18n.t('error'), i18n.t('loginRequired') || 'You must be logged in to book');
       return;
     }
+    if (academySuspended) {
+      Alert.alert(i18n.t('error') || 'Error', i18n.t('suspendedProviderBookingUnavailable') || 'This provider is suspended and cannot receive bookings right now.');
+      return;
+    }
 
     if (branches.length > 0 && !selectedBranch) {
       Alert.alert(i18n.t('error') || 'Error', i18n.t('selectBranch') || 'Please select a branch');
       return;
     }
+
+    Alert.alert(
+      i18n.t('keepAppOpenTitle') || 'Keep App Open',
+      i18n.t('keepAppOpenBookingMessage') || 'Please keep the app open until the reservation finishes.'
+    );
 
     // Fetch user name from Firestore
     let customerName = user.displayName || (i18n.t('parent') || 'Parent');
@@ -495,6 +522,7 @@ export default function ParentAcademyDetailsScreen() {
               )}
             </View>
             <Text style={styles.academyName}>{academy.name}</Text>
+            {academySuspended && <SuspendedBadge />}
             <View style={styles.locationRow}>
               <Ionicons name="location" size={16} color="rgba(255,255,255,0.7)" />
               <Text style={styles.locationText}>{[academy.district, getCityLabel(academy.city)].filter(Boolean).join(', ') || getCityLabel(academy.city)}</Text>
@@ -741,10 +769,10 @@ export default function ParentAcademyDetailsScreen() {
                         </Text>
                       </View>
                       <TouchableOpacity
-                        style={[styles.bookProgramButton, (bookingLoading || privateBookingLoadingId === program.id) && { opacity: 0.6 }]}
+                        style={[styles.bookProgramButton, (academySuspended || bookingLoading || privateBookingLoadingId === program.id) && { opacity: 0.6 }]}
                         onPress={() => handleBookPrivateTraining(program)}
                         activeOpacity={0.8}
-                        disabled={bookingLoading || privateBookingLoadingId === program.id}
+                        disabled={academySuspended || bookingLoading || privateBookingLoadingId === program.id}
                       >
                         {privateBookingLoadingId === program.id ? (
                           <FootballLoader color="#fff" />
@@ -763,6 +791,11 @@ export default function ParentAcademyDetailsScreen() {
 
             {/* ====== BOOKING OPTIONS SECTION ====== */}
             <View style={styles.bookingSection}>
+              {academySuspended && (
+                <View style={styles.suspensionNotice}>
+                  <Text style={styles.suspensionNoticeText}>{i18n.t('suspendedProviderBookingUnavailable') || 'This provider is suspended and cannot receive bookings right now.'}</Text>
+                </View>
+              )}
               <Text style={styles.bookingSectionTitle}>{i18n.t('bookNow') || 'Book Now'}</Text>
               <Text style={styles.bookingSectionSubtitle}>{i18n.t('chooseBookingOption') || 'Choose your preferred booking option'}</Text>
 
@@ -827,9 +860,9 @@ export default function ParentAcademyDetailsScreen() {
                   )}
 
                   <TouchableOpacity
-                    style={[styles.reserveButton, (!selectedAge || bookingLoading) && styles.reserveButtonDisabled]}
+                    style={[styles.reserveButton, (!selectedAge || bookingLoading || academySuspended) && styles.reserveButtonDisabled]}
                     onPress={handleReserve}
-                    disabled={!selectedAge || bookingLoading}
+                    disabled={!selectedAge || bookingLoading || academySuspended}
                   >
                     {bookingLoading ? (
                       <FootballLoader color="#fff" />
@@ -1452,6 +1485,20 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
     marginBottom: 20,
+  },
+  suspensionNotice: {
+    marginBottom: 14,
+    backgroundColor: '#fef2f2',
+    borderColor: '#fecaca',
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+  },
+  suspensionNoticeText: {
+    color: '#b91c1c',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
   },
   bookingOptionsContainer: {
     gap: 16,

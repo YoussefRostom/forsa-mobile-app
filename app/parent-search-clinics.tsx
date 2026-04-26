@@ -11,6 +11,8 @@ import i18n from '../locales/i18n';
 import { db } from '../lib/firebase';
 import { collection, getDocs, query } from 'firebase/firestore';
 import FootballLoader from '../components/FootballLoader';
+import SuspendedBadge from '../components/SuspendedBadge';
+import { isSuspendedEntity } from '../lib/suspension';
 
 const cities = Object.entries(i18n.t('cities', { returnObjects: true }) as Record<string, string>).map(([key, label]) => ({ key, label }));
 const cityOptions = cities.filter(({ key }) => !['giza', 'newCairo'].includes(key));
@@ -213,6 +215,8 @@ interface Clinic {
   minPrice: number;
   servicePrices: Record<string, number>;
   locations?: { city?: string; district?: string; address?: string; latitude?: number; longitude?: number; mapUrl?: string }[];
+  isSuspended?: boolean;
+  status?: string;
 }
 
 export default function ParentSearchClinicsScreen() {
@@ -298,11 +302,16 @@ export default function ParentSearchClinicsScreen() {
 
       const clinicsRef = collection(db, 'clinics');
       const q = query(clinicsRef);
-      const querySnapshot = await getDocs(q);
+      const [querySnapshot, usersSnapshot] = await Promise.all([
+        getDocs(q),
+        getDocs(collection(db, 'users')),
+      ]);
+      const userMap = new Map(usersSnapshot.docs.map((userDoc) => [userDoc.id, userDoc.data()]));
 
       const clinicList: Clinic[] = [];
       querySnapshot.forEach((doc) => {
         const data = doc.data();
+        const userData = userMap.get(doc.id);
 
         const clinicServices: string[] = [];
         const servicePrices: Record<string, number> = {};
@@ -335,6 +344,8 @@ export default function ParentSearchClinicsScreen() {
           minPrice: minServicePrice === Infinity ? 0 : minServicePrice,
           servicePrices,
           locations: Array.isArray(data.locations) ? data.locations : [],
+          isSuspended: isSuspendedEntity({ ...data, ...userData }),
+          status: userData?.status || data.status || '',
         });
       });
 
@@ -430,6 +441,18 @@ export default function ParentSearchClinicsScreen() {
 
     setSortBy(sortKey);
     setSortModal(false);
+  };
+
+  const handleClinicPress = (clinic: Clinic) => {
+    if (clinic.isSuspended) {
+      Alert.alert(
+        i18n.t('suspendedBadge') || 'Suspended',
+        i18n.t('suspendedProviderUnavailable') || 'This provider is suspended and unavailable right now.'
+      );
+      return;
+    }
+
+    router.push({ pathname: '/parent-clinic-details', params: { id: clinic.id } });
   };
 
   const filtered = clinics
@@ -791,8 +814,8 @@ export default function ParentSearchClinicsScreen() {
 
                 return (
                   <TouchableOpacity
-                    onPress={() => router.push({ pathname: '/parent-clinic-details', params: { id: item.id } })}
-                    style={styles.card}
+                    onPress={() => handleClinicPress(item)}
+                    style={[styles.card, item.isSuspended && styles.cardSuspended]}
                     activeOpacity={0.8}
                   >
                     <View style={styles.cardHeader}>
@@ -809,6 +832,11 @@ export default function ParentSearchClinicsScreen() {
                         </View>
                       </View>
                     </View>
+                    {item.isSuspended && (
+                      <View style={styles.cardSuspendedBadgeRow}>
+                        <SuspendedBadge tone="light" />
+                      </View>
+                    )}
                     <Text style={styles.cardDesc}>{item.description}</Text>
                     {Number.isFinite(distanceMap[item.id]) && (
                       <Text style={styles.cardDistanceText}>
@@ -1159,6 +1187,14 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.15,
     shadowRadius: 12,
     elevation: 5,
+  },
+  cardSuspended: {
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    opacity: 0.9,
+  },
+  cardSuspendedBadgeRow: {
+    marginBottom: 10,
   },
   cardHeader: {
     flexDirection: 'row',
