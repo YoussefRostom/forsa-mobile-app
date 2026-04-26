@@ -7,7 +7,7 @@
     "icon": "./assets/images/profile.png",
     "scheme": "forsaeg",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.yousseffrostom.forsaeg",
